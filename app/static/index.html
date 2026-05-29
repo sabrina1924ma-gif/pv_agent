@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>光伏电站智能助手</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.4.21/vue.global.prod.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
+<!-- Fallback if cdnjs is unreachable -->
+<script>
+if (typeof Vue === 'undefined') {
+  document.write('<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"><\/script>')
+}
+if (typeof marked === 'undefined') {
+  document.write('<script src="https://unpkg.com/marked/marked.min.js"><\/script>')
+}
+</script>
+<style>
+:root {
+  --bg: #ffffff;
+  --bg-sidebar: #f7f7f8;
+  --bg-hover: #ececf1;
+  --bg-active: #e3e3e8;
+  --bg-input: #f4f4f5;
+  --border: #e5e5e8;
+  --fg: #1a1a2e;
+  --fg2: #6b6b80;
+  --fg3: #9e9eaf;
+  --accent: #10a37f;
+  --accent-hover: #0d8c6d;
+  --accent-light: #e6f7f2;
+  --user-bg: #f0f0f5;
+  --radius: 16px;
+  --shadow: 0 2px 12px rgba(0,0,0,.06);
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+               'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app { display:flex; height:100vh; }
+
+/* ====== Sidebar ====== */
+.sidebar {
+  width: 280px;
+  min-width: 280px;
+  background: var(--bg-sidebar);
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+}
+
+.sidebar-brand {
+  padding: 20px 20px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sidebar-brand .logo {
+  width: 36px; height: 36px;
+  background: linear-gradient(135deg, #10a37f, #0d8c6d);
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 18px;
+}
+.sidebar-brand h1 { font-size: 16px; font-weight: 600; color: var(--fg); }
+
+.new-chat-btn {
+  margin: 0 16px 12px;
+  padding: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  transition: background .15s;
+}
+.new-chat-btn:hover { background: var(--bg-hover); }
+
+.conv-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 12px;
+}
+.conv-list .label {
+  font-size: 11px;
+  color: var(--fg3);
+  padding: 8px 8px 6px;
+  text-transform: uppercase;
+  letter-spacing: .3px;
+}
+.conv-item {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--fg);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+  transition: background .1s;
+}
+.conv-item:hover { background: var(--bg-hover); }
+.conv-item.active { background: var(--bg-active); font-weight: 500; }
+
+.sidebar-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--fg3);
+  display: flex; align-items: center; gap: 8px;
+}
+.sidebar-footer .avatar {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px;
+}
+.sidebar-footer .status-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  margin-left: auto;
+}
+.sidebar-footer .status-dot.on { background: #10a37f; }
+.sidebar-footer .status-dot.off { background: #ccc; }
+
+/* ====== Main ====== */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  position: relative;
+}
+
+/* Welcome screen (no messages yet) */
+.welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  text-align: center;
+}
+.welcome-icon {
+  width: 72px; height: 72px;
+  background: linear-gradient(135deg, #e6f7f2, #c8f0e0);
+  border-radius: 20px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 36px;
+  margin-bottom: 20px;
+}
+.welcome h2 { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+.welcome p { font-size: 14px; color: var(--fg2); max-width: 460px; line-height: 1.6; }
+
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 28px;
+  max-width: 520px;
+  justify-content: center;
+}
+.suggestion {
+  padding: 10px 18px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--bg);
+  cursor: pointer;
+  transition: all .15s;
+}
+.suggestion:hover {
+  background: var(--accent-light);
+  border-color: var(--accent);
+}
+
+/* Chat area (has messages) */
+.chat-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 0;
+}
+
+.chat-inner {
+  max-width: 768px;
+  margin: 0 auto;
+  padding: 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Messages */
+.msg { display: flex; flex-direction: column; }
+.msg.user { align-items: flex-end; }
+.msg.agent { align-items: flex-start; }
+
+.msg .bubble {
+  max-width: 90%;
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  line-height: 1.65;
+  font-size: 14px;
+  word-break: break-word;
+}
+
+.msg.user .bubble {
+  background: var(--user-bg);
+  color: var(--fg);
+  border-bottom-right-radius: 6px;
+}
+
+.msg.agent .bubble {
+  color: var(--fg);
+  border-bottom-left-radius: 6px;
+}
+
+/* streaming cursor */
+.msg.agent .bubble.streaming::after {
+  content: '▊';
+  animation: blink 1s infinite;
+  color: var(--accent);
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+/* Markdown in agent messages */
+.msg.agent .bubble h1,
+.msg.agent .bubble h2,
+.msg.agent .bubble h3 {
+  margin: 10px 0 6px;
+  color: var(--fg);
+}
+.msg.agent .bubble h1 { font-size: 18px; }
+.msg.agent .bubble h2 { font-size: 16px; }
+.msg.agent .bubble h3 { font-size: 15px; }
+.msg.agent .bubble p { margin: 6px 0; }
+.msg.agent .bubble ul,
+.msg.agent .bubble ol { padding-left: 20px; margin: 6px 0; }
+.msg.agent .bubble li { margin: 2px 0; }
+.msg.agent .bubble a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.msg.agent .bubble a:hover { color: var(--accent-hover); }
+.msg.agent .bubble code {
+  background: var(--bg-input);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #d63384;
+}
+.msg.agent .bubble pre {
+  background: #1a1a2e;
+  color: #e2e8f0;
+  padding: 14px;
+  border-radius: 10px;
+  overflow-x: auto;
+  margin: 8px 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.msg.agent .bubble pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+.msg.agent .bubble table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 13px;
+}
+.msg.agent .bubble th {
+  background: var(--bg-input);
+  padding: 6px 12px;
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 2px solid var(--border);
+}
+.msg.agent .bubble td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.msg.agent .bubble blockquote {
+  border-left: 3px solid var(--accent);
+  padding: 4px 14px;
+  margin: 8px 0;
+  color: var(--fg2);
+  background: var(--bg-sidebar);
+  border-radius: 0 6px 6px 0;
+}
+.msg.agent .bubble strong { font-weight: 600; }
+.msg.agent .bubble em { font-style: italic; }
+.msg.agent .bubble hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}
+.msg.agent .bubble img {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 6px 0;
+}
+
+/* Thinking indicator */
+.thinking {
+  display: flex; align-items: center; gap: 8px;
+  padding: 14px 18px;
+  font-size: 13px;
+  color: var(--fg2);
+}
+.thinking .dots { display: flex; gap: 3px; }
+.thinking .dots span {
+  width: 5px; height: 5px;
+  background: var(--accent);
+  border-radius: 50%;
+  animation: dotPulse 1.4s infinite ease-in-out both;
+}
+.thinking .dots span:nth-child(1) { animation-delay: -0.32s; }
+.thinking .dots span:nth-child(2) { animation-delay: -0.16s; }
+@keyframes dotPulse {
+  0%,80%,100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+/* Input area */
+.input-area {
+  padding: 0 24px 24px;
+}
+.input-wrapper {
+  max-width: 768px;
+  margin: 0 auto;
+  position: relative;
+}
+.input-box {
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  background: var(--bg-input);
+  border: 1px solid transparent;
+  border-radius: 20px;
+  padding: 8px 8px 8px 18px;
+  transition: border-color .2s, box-shadow .2s;
+}
+.input-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(16,163,127,.15);
+}
+.input-box textarea {
+  flex: 1;
+  border: none;
+  background: transparent;
+  resize: none;
+  outline: none;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--fg);
+  line-height: 1.5;
+  padding: 6px 0;
+  max-height: 150px;
+  min-height: 24px;
+}
+.input-box textarea::placeholder { color: var(--fg3); }
+.input-box button {
+  width: 36px; height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  transition: background .15s, opacity .15s;
+}
+.input-box button:hover { background: var(--accent-hover); }
+.input-box button:disabled { opacity: .35; cursor: not-allowed; }
+.input-box button svg { width: 18px; height: 18px; }
+
+.input-hint {
+  text-align: center;
+  font-size: 11px;
+  color: var(--fg3);
+  margin-top: 8px;
+}
+
+/* Empty state in chat (no conversations yet) */
+.empty-convs {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 20px;
+  text-align: center;
+}
+.empty-convs .icon { font-size: 32px; margin-bottom: 12px; opacity: 0.4; }
+.empty-convs p { font-size: 12px; color: var(--fg3); line-height: 1.6; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d1d1d6; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #b0b0b8; }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.msg { animation: fadeIn .25s ease; }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="logo">☀</div>
+      <h1>光伏助手</h1>
+    </div>
+
+    <button class="new-chat-btn" @click="newChat">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      新对话
+    </button>
+
+    <div class="conv-list">
+      <div class="label">对话历史</div>
+      <div v-if="conversations.length === 0" class="empty-convs">
+        <div class="icon">💬</div>
+        <p>暂无对话记录<br>开始一个新的对话吧</p>
+      </div>
+      <div
+        v-for="c in conversations" :key="c.id"
+        class="conv-item"
+        :class="{ active: c.id === activeConvId }"
+        @click="switchConv(c.id)"
+      >{{ c.title }}</div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="avatar">👤</div>
+      <span>运维工程师</span>
+      <span class="status-dot" :class="wsConnected ? 'on' : 'off'" title="连接状态"></span>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <!-- Welcome (no messages) -->
+    <div class="welcome" v-if="currentMessages.length === 0">
+      <div class="welcome-icon">⚡</div>
+      <h2>光伏电站智能助手</h2>
+      <p>我可以帮您查询电站发电量、设备运行状态、辐照度数据，生成运维分析报告。请直接告诉我您想了解的内容。</p>
+      <div class="suggestions">
+        <button class="suggestion" @click="quickSend('3号电站2024年总发电量是多少？')">📊 查询发电量</button>
+        <button class="suggestion" @click="quickSend('最近一周有哪些设备故障？')">🔧 设备故障统计</button>
+        <button class="suggestion" @click="quickSend('生成一份上月运维分析报告')">📋 生成运维报告</button>
+        <button class="suggestion" @click="quickSend('今天各电站的实时功率是多少？')">⚡ 实时功率查询</button>
+      </div>
+    </div>
+
+    <!-- Chat area (has messages) -->
+    <div class="chat-area" v-else ref="chatEl">
+      <div class="chat-inner">
+        <div v-for="(msg, i) in currentMessages" :key="i" class="msg" :class="msg.role">
+          <div class="bubble" :class="{ streaming: msg.streaming }" v-html="msg.html || escapeHtml(msg.content)"></div>
+        </div>
+        <!-- Thinking dots while waiting for first token -->
+        <div class="thinking" v-if="streaming && currentMessages.length > 0 && currentMessages[currentMessages.length-1].role === 'user'">
+          <div class="dots"><span></span><span></span><span></span></div>
+          正在分析...
+        </div>
+      </div>
+    </div>
+
+    <!-- Input -->
+    <div class="input-area">
+      <div class="input-wrapper">
+        <div class="input-box">
+          <textarea
+            ref="inputEl"
+            v-model="inputText"
+            placeholder="输入您的问题，例如：3号电站昨天发电量是多少？"
+            @keydown.enter.exact.prevent="send"
+            @input="autoResize"
+            :disabled="streaming"
+            rows="1"
+          ></textarea>
+          <button @click="send" :disabled="streaming || !inputText.trim()" title="发送">
+            <svg v-if="!streaming" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+          </button>
+        </div>
+        <div class="input-hint">按 Enter 发送，支持自然语言查询电站数据</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const { createApp, ref, reactive, nextTick, computed, onMounted, onUnmounted } = Vue
+
+createApp({
+  setup() {
+    // ---- internal state (never shown to user) ----
+    const sessionId = ref(genId())
+    const wsConnected = ref(false)
+
+    // ---- UI state ----
+    const inputText = ref('')
+    const streaming = ref(false)
+    const chatEl = ref(null)
+    const inputEl = ref(null)
+
+    // Conversation management
+    const conversations = ref([])        // { id, title, sessionId, messages: [...] }
+    const activeConvId = ref(null)
+
+    let ws = null
+    let reconnectTimer = null
+    let activeSessionId = null          // sessionId for current conversation
+
+    // ---- computed ----
+    const activeConv = computed(() => {
+      return conversations.value.find(c => c.id === activeConvId.value) || null
+    })
+    const currentMessages = computed(() => {
+      return activeConv.value ? activeConv.value.messages : []
+    })
+
+    // ---- helpers ----
+    function genId() {
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16)
+      })
+    }
+    function now() {
+      return new Date().toLocaleTimeString('zh-CN', { hour12: false })
+    }
+    function escapeHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    }
+    function scrollBottom() {
+      nextTick(() => {
+        if (chatEl.value) chatEl.value.scrollTop = chatEl.value.scrollHeight
+      })
+    }
+    function autoResize() {
+      nextTick(() => {
+        const el = inputEl.value
+        if (el) {
+          el.style.height = 'auto'
+          el.style.height = Math.min(el.scrollHeight, 150) + 'px'
+        }
+      })
+    }
+
+    // ---- conversation management ----
+    function createConv(title) {
+      const id = genId()
+      const sid = genId()
+      conversations.value.unshift({
+        id, title, sessionId: sid, messages: []
+      })
+      return id
+    }
+
+    function newChat() {
+      if (streaming.value) return
+      const id = createConv('新对话')
+      activeConvId.value = id
+      activeSessionId = conversations.value.find(c => c.id === id).sessionId
+      inputText.value = ''
+      nextTick(() => { if (inputEl.value) inputEl.value.focus() })
+    }
+
+    function switchConv(id) {
+      if (streaming.value || id === activeConvId.value) return
+      activeConvId.value = id
+      activeSessionId = conversations.value.find(c => c.id === id).sessionId
+      // Reconnect WS for this session
+      reconnectForSession(activeSessionId)
+      nextTick(scrollBottom)
+    }
+
+    function reconnectForSession(sid) {
+      if (ws) { ws.close(); ws = null }
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+      connectWs(sid)
+    }
+
+    // ---- WebSocket ----
+    function connectWs(sid) {
+      const targetSid = sid || sessionId.value
+      if (ws && ws.readyState === WebSocket.OPEN) return
+
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const url = `${proto}//${location.host}/ws/${targetSid}`
+      ws = new WebSocket(url)
+
+      ws.onopen = () => {
+        wsConnected.value = true
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+      }
+      ws.onmessage = (evt) => {
+        const data = JSON.parse(evt.data)
+        handleWsEvent(data)
+      }
+      ws.onclose = () => {
+        wsConnected.value = false
+        reconnectTimer = setTimeout(() => connectWs(targetSid), 3000)
+      }
+      ws.onerror = () => { wsConnected.value = false }
+    }
+
+    function handleWsEvent(data) {
+      const { event, data: payload } = data
+
+      switch (event) {
+        case 'connected': break
+        case 'ping': break
+        case 'thinking': break
+
+        case 'node_start': break
+        case 'node_end': break
+        case 'tool_start': break
+        case 'tool_end': break
+
+        case 'token': {
+          const token = payload.token || ''
+          const msgs = activeConv.value?.messages
+          if (!msgs) break
+          const last = msgs[msgs.length - 1]
+          if (last && last.role === 'agent' && last.streaming) {
+            last.rawContent += token
+            last.content += token
+            last.html = renderMd(last.rawContent)
+          } else {
+            msgs.push({
+              role: 'agent',
+              rawContent: token,
+              content: token,
+              html: renderMd(token),
+              streaming: true,
+            })
+          }
+          scrollBottom()
+          break
+        }
+
+        case 'done': {
+          const msgs = activeConv.value?.messages
+          if (!msgs) break
+          const last = msgs[msgs.length - 1]
+          if (last && last.role === 'agent') {
+            last.streaming = false
+            if (payload.report_md) {
+              last.rawContent = payload.report_md
+              last.content = payload.report_md
+              last.html = renderMd(payload.report_md)
+            }
+            // Auto-title the conversation from first exchange
+            updateConvTitle()
+          }
+          streaming.value = false
+          scrollBottom()
+          break
+        }
+
+        case 'error':
+          streaming.value = false
+          break
+      }
+    }
+
+    function renderMd(text) {
+      if (!text) return ''
+      if (typeof marked === 'undefined') {
+        return escapeHtml(text).replace(/\n/g, '<br>')
+      }
+      try {
+        // Configure marked for safe rendering
+        marked.setOptions({
+          breaks: true,        // single \n → <br>
+          gfm: true,           // GitHub-flavored markdown (tables, strikethrough, etc.)
+        })
+        const html = marked.parse(text)
+        return html
+      } catch {
+        return escapeHtml(text).replace(/\n/g, '<br>')
+      }
+    }
+
+    function updateConvTitle() {
+      const conv = activeConv.value
+      if (!conv || conv.title !== '新对话') return
+      // Use first user message as title, truncated
+      const firstUser = conv.messages.find(m => m.role === 'user')
+      if (firstUser) {
+        const t = firstUser.content.trim()
+        conv.title = t.length > 24 ? t.slice(0, 24) + '…' : t
+      }
+    }
+
+    // ---- send ----
+    function send() {
+      const text = inputText.value.trim()
+      if (!text || streaming.value) return
+
+      // Ensure we have an active conversation
+      let conv = activeConv.value
+      if (!conv) {
+        const id = createConv('新对话')
+        activeConvId.value = id
+        conv = conversations.value.find(c => c.id === id)
+        activeSessionId = conv.sessionId
+      }
+
+      // Add user message
+      conv.messages.push({
+        role: 'user',
+        content: text,
+        html: escapeHtml(text),
+      })
+      inputText.value = ''
+      streaming.value = true
+      autoResize()
+      scrollBottom()
+
+      // Ensure WS connected for this session
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        connectWs(activeSessionId)
+        setTimeout(() => sendWs(text), 500)
+      } else {
+        sendWs(text)
+      }
+    }
+
+    function sendWs(text) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        sendHttp(text)
+        return
+      }
+      ws.send(JSON.stringify({
+        content: text,
+        station_id: null,
+      }))
+    }
+
+    async function sendHttp(text) {
+      try {
+        const resp = await fetch('/api/v1/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Session-Id': activeSessionId || sessionId.value,
+          },
+          body: JSON.stringify({ message: text, station_id: null }),
+        })
+        const data = await resp.json()
+        const msgs = activeConv.value?.messages
+        if (msgs) {
+          msgs.push({
+            role: 'agent',
+            content: data.report_md || data.message || '',
+            html: renderMd(data.report_md || data.message || ''),
+            streaming: false,
+          })
+        }
+        updateConvTitle()
+      } catch (e) {
+        const msgs = activeConv.value?.messages
+        if (msgs) {
+          msgs.push({
+            role: 'agent',
+            content: '抱歉，请求未能完成，请稍后重试。',
+            html: '<em style="color:#999">抱歉，请求未能完成，请稍后重试。</em>',
+            streaming: false,
+          })
+        }
+      }
+      streaming.value = false
+      scrollBottom()
+    }
+
+    function quickSend(text) {
+      inputText.value = text
+      send()
+    }
+
+    // ---- lifecycle ----
+    onMounted(() => {
+      connectWs(sessionId.value)
+      // Start with a fresh conversation
+      newChat()
+    })
+    onUnmounted(() => {
+      if (ws) ws.close()
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+    })
+
+    return {
+      inputText, streaming, wsConnected,
+      conversations, activeConvId, currentMessages,
+      chatEl, inputEl,
+      send, newChat, switchConv, quickSend, autoResize, escapeHtml,
+    }
+  }
+}).mount('#app')
+</script>
+</body>
+</html>

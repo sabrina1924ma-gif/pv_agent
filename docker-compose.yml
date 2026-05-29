@@ -1,0 +1,90 @@
+# ============================================================
+# PV Agent - Docker Compose
+# Private deployment: app + redis + postgres (LLM via DeepSeek API)
+# ============================================================
+
+services:
+  # --- FastAPI Application ---
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pv_agent_app
+    restart: unless-stopped
+    ports:
+      - "${HOST:-0.0.0.0}:${PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      - REDIS_HOST=redis
+      - POSTGRES_HOST=postgres
+      # DEEPSEEK_API_KEY is picked up from .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app:ro
+      - ./logs:/app/logs
+    networks:
+      - pv_agent_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # --- Redis (Cache & Session State) ---
+  redis:
+    image: redis:7-alpine
+    container_name: pv_agent_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - pv_agent_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- PostgreSQL (Persistence) ---
+  postgres:
+    image: postgres:16-alpine
+    container_name: pv_agent_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pv_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-pv_agent}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - pv_agent_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pv_agent} -d ${POSTGRES_DB:-pv_agent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+
+networks:
+  pv_agent_net:
+    driver: bridge
