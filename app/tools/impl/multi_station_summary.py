@@ -1,10 +1,11 @@
 """
-Tool: multi_station_summary
+工具：multi_station_summary
 
-跨电站对比分析——从 mock 数据层汇总多个电站数据。
+跨电站对比分析——从模拟数据层汇总多个电站数据。
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from app.data.mock import STATIONS, get_power_data, get_life_assessment as mock_life
@@ -35,15 +36,20 @@ async def multi_station_summary(
         f"metric={metric}, year={year}"
     )
 
-    stations_data = []
-    for sid in station_ids:
-        if sid not in STATIONS:
-            continue
+    async def _fetch_one_station(sid: str, yr: int) -> dict[str, Any] | None:
+        """并发获取单个电站的三维度数据（发电、故障、健康）。
+
+        使用 asyncio.gather + asyncio.to_thread 并行执行三个同步 mock 查询。
+        当底层 mock 替换为异步 I/O（如数据库查询）时，
+        将 .to_thread() 去掉即可，asyncio.gather 结构无需改动。
+        """
         st = STATIONS[sid]
-        power = get_power_data(sid, year)
-        life = mock_life(sid)
-        faults = get_fault_data(sid, f"{year}-01-01", f"{year}-12-31")
-        stations_data.append({
+        power, life, faults = await asyncio.gather(
+            asyncio.to_thread(get_power_data, sid, yr),
+            asyncio.to_thread(mock_life, sid),
+            asyncio.to_thread(get_fault_data, sid, f"{yr}-01-01", f"{yr}-12-31"),
+        )
+        return {
             "station_id": sid,
             "station_name": st["name"],
             "capacity_kw": st["capacity_kw"],
@@ -54,7 +60,13 @@ async def multi_station_summary(
             "efficiency": round(0.88 + (st["health_base"] - 0.78) * 0.3, 2),
             "fault_count": faults["total_faults"],
             "health_score": life["overall_health_score"],
-        })
+        }
+
+    # 并发获取所有电站数据 — 各电站之间也并行
+    results = await asyncio.gather(
+        *[_fetch_one_station(sid, year) for sid in station_ids if sid in STATIONS],
+    )
+    stations_data = [r for r in results if r is not None]
 
     by_gen = sorted(stations_data, key=lambda s: s["total_kwh"], reverse=True)
     by_health = sorted(stations_data, key=lambda s: s["health_score"], reverse=True)

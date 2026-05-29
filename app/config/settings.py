@@ -1,8 +1,8 @@
 """
-Centralized application settings using Pydantic-settings.
+集中化应用设置，使用 Pydantic-settings。
 
-Reads from .env file and environment variables. All configuration flows
-through this module — no other module should read from os.environ directly.
+从 .env 文件和环境变量读取。所有配置都通过此模块流转——
+其他模块不应直接读取 os.environ。
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Application-wide configuration. All values can be overridden via env vars."""
+    """应用全局配置。所有值均可通过环境变量覆盖。"""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -25,7 +25,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- Application ---
+    # --- 应用 ---
     app_name: str = "pv_agent"
     app_version: str = "0.1.0"
     debug: bool = False
@@ -34,12 +34,12 @@ class Settings(BaseSettings):
     )
     environment: Literal["production", "staging", "development"] = "production"
 
-    # --- Server ---
+    # --- 服务器 ---
     host: str = "0.0.0.0"
     port: int = 8000
     workers: int = 4
 
-    # --- Security ---
+    # --- 安全 ---
     secret_key: str = secrets.token_hex(32)
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
     rate_limit_requests: int = 60
@@ -50,8 +50,8 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     redis_db: int = 0
     redis_password: str = ""
-    redis_session_ttl: int = 86400       # 24 hours
-    redis_tool_cache_ttl: int = 300      # 5 minutes
+    redis_session_ttl: int = 86400       # 24 小时
+    redis_tool_cache_ttl: int = 300      # 5 分钟
 
     # --- PostgreSQL ---
     postgres_host: str = "localhost"
@@ -66,11 +66,11 @@ class Settings(BaseSettings):
 
     # --- DeepSeek API ---
     deepseek_api_key: str = "sk-your-api-key-here"
-    # OpenAI-compatible endpoint (no trailing slash)
+    # OpenAI 兼容接口（无尾随斜杠）
     deepseek_base_url: str = "https://api.deepseek.com"
-    # deepseek-v4-pro (旗舰, 1.6T/49B MoE) or deepseek-v4-flash (高性价比, 284B/13B MoE)
+    # deepseek-v4-pro（旗舰，1.6T/49B MoE）或 deepseek-v4-flash（高性价比，284B/13B MoE）
     deepseek_model: str = "deepseek-v4-flash"
-    # Lightweight tasks like intent classification use the same model with temp=0
+    # 意图分类等轻量任务使用相同模型，temp=0
     deepseek_light_model: str = "deepseek-v4-flash"
     llm_temperature: float = 0.3
     llm_max_tokens: int = 4096
@@ -83,13 +83,13 @@ class Settings(BaseSettings):
 
     @property
     def redis_url(self) -> str:
-        """Build the Redis connection URL."""
+        """构建 Redis 连接 URL。"""
         auth = f":{self.redis_password}@" if self.redis_password else ""
         return f"redis://{auth}{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
     @property
     def postgres_url(self) -> str:
-        """Build the async PostgreSQL connection URL."""
+        """构建异步 PostgreSQL 连接 URL。"""
         return (
             f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
@@ -97,7 +97,7 @@ class Settings(BaseSettings):
 
     @property
     def postgres_sync_url(self) -> str:
-        """Build the synchronous PostgreSQL connection URL (for Alembic, etc.)."""
+        """构建同步 PostgreSQL 连接 URL（用于 Alembic 等）。"""
         return (
             f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
@@ -106,5 +106,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """Return the cached singleton Settings instance."""
+    """返回缓存的单例 Settings 实例。"""
     return Settings()

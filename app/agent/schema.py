@@ -1,9 +1,8 @@
 """
-Agent state definitions using Pydantic.
+使用 Pydantic 的 Agent 状态定义。
 
-Defines the shape of the state object that flows through every node
-in the LangGraph state machine. Uses TypedDict-style annotation for
-LangGraph compatibility, but with Pydantic validation at the boundaries.
+定义在 LangGraph 状态机中流经每个节点的状态对象结构。
+使用 TypedDict 风格注解以兼容 LangGraph，但在边界处使用 Pydantic 验证。
 """
 
 from __future__ import annotations
@@ -15,25 +14,25 @@ from langchain_core.messages import BaseMessage
 
 
 # ============================================================================
-# AgentState — the central state object flowing through the graph
+# AgentState — 流经图的中心状态对象
 # ============================================================================
 
 class AgentState(TypedDict, total=False):
     """
-    Shared state that passes through every node in the LangGraph.
+    流经 LangGraph 每个节点的共享状态。
 
-    Only 'messages' and 'session_id' are required at invoke time.
-    Intermediate fields (intent, tool_results, etc.) are populated by nodes.
+    调用时只需要 'messages' 和 'session_id'。
+    中间字段（intent、tool_results 等）由各节点填充。
 
-    Fields:
-        messages:           Full conversation history. Annotated with add_messages.
-        session_id:         Unique session identifier (required at invoke).
-        intent:             Classified intent label → set by intent_router.
-        tool_results:       Tool invocation results → set by tool_executor.
-        station_id:         Target station ID → set by intent_router (regex).
-        query_params:       Extracted query params → set by intent_router.
-        report_md:          Generated Markdown report → set by report_node.
-        error:              Error message if unrecoverable → set by any node.
+    字段：
+        messages：      完整对话历史。使用 add_messages 注解。
+        session_id：    唯一会话标识（调用时必需）。
+        intent：        分类后的意图标签 → 由 intent_router 设置。
+        tool_results：  工具调用结果 → 由 tool_executor 设置。
+        station_id：    目标电站 ID → 由 intent_router 设置（正则提取）。
+        query_params：  提取的查询参数 → 由 intent_router 设置。
+        report_md：     生成的 Markdown 报告 → 由 report_node 设置。
+        error：         不可恢复时的错误信息 → 由任意节点设置。
     """
 
     messages: Annotated[list[BaseMessage], add_messages]

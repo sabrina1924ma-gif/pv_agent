@@ -1,15 +1,61 @@
 /**
- * HTTP API client for the PV Agent backend.
- *
- * TODO:
- *   - Implement session_id header injection (from localStorage).
- *   - Add request/response interceptors for error handling.
- *   - Add retry logic for transient failures.
+ * PV Agent 后端的 HTTP API 客户端。
  */
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/v1";
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 1000;
 
-/** Get or create a session ID, persisted in localStorage */
+// --- 请求拦截器 ---
+
+function buildHeaders(): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    "X-Session-Id": getSessionId(),
+  };
+}
+
+// --- 响应拦截器 ---
+
+async function handleResponse(resp: Response): Promise<Response> {
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new Error(`HTTP ${resp.status}: ${body || resp.statusText}`);
+  }
+  return resp;
+}
+
+// --- 重试逻辑 ---
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  retries = MAX_RETRIES
+): Promise<Response> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const resp = await fetch(url, init);
+      // 仅对 5xx 和网络错误重试，4xx 直接抛
+      if (resp.status >= 500 && attempt < retries) {
+        await sleep(RETRY_DELAY_MS * attempt);
+        continue;
+      }
+      return await handleResponse(resp);
+    } catch (err) {
+      if (attempt >= retries) throw err;
+      await sleep(RETRY_DELAY_MS * attempt);
+    }
+  }
+  throw new Error("请求失败：已达最大重试次数");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// --- 公开 API ---
+
+/** 获取或创建会话 ID，持久化存储在 localStorage 中 */
 export function getSessionId(): string {
   let sessionId = localStorage.getItem("pv_session_id");
   if (!sessionId) {
@@ -19,32 +65,56 @@ export function getSessionId(): string {
   return sessionId;
 }
 
-/** POST /api/v1/chat — send a message and get a complete response */
+/** POST /api/v1/chat — 发送消息并获取完整响应 */
 export async function sendChatMessage(
   message: string,
   stationId?: string
 ): Promise<Response> {
-  return fetch(`${BASE_URL}/chat`, {
+  return fetchWithRetry(`${BASE_URL}/chat`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Session-Id": getSessionId(),
-    },
+    headers: buildHeaders(),
     body: JSON.stringify({ message, station_id: stationId }),
   });
 }
 
-/** GET /api/v1/sessions/{id} — retrieve session history */
+/** GET /api/v1/sessions/{id} — 获取会话历史 */
 export async function getSessionHistory(sessionId: string): Promise<Response> {
-  return fetch(`${BASE_URL}/sessions/${sessionId}`, {
-    headers: { "X-Session-Id": sessionId },
+  return fetchWithRetry(`${BASE_URL}/sessions/${sessionId}`, {
+    headers: buildHeaders(),
   });
 }
 
-/** DELETE /api/v1/sessions/{id} — clear a session */
+/** DELETE /api/v1/sessions/{id} — 清除会话 */
 export async function deleteSession(sessionId: string): Promise<Response> {
-  return fetch(`${BASE_URL}/sessions/${sessionId}`, {
+  return fetchWithRetry(`${BASE_URL}/sessions/${sessionId}`, {
     method: "DELETE",
-    headers: { "X-Session-Id": sessionId },
+    headers: buildHeaders(),
   });
+}
+
+/** POST /api/v1/report/pdf — 将 Markdown 报告转换为 PDF 并触发浏览器下载 */
+export async function downloadReportPdf(
+  markdown: string,
+  title: string = "光伏电站报告"
+): Promise<void> {
+  const resp = await fetchWithRetry(`${BASE_URL}/report/pdf`, {
+    method: "POST",
+    headers: buildHeaders(),
+    body: JSON.stringify({ markdown, title }),
+  });
+
+  // 从 Content-Disposition 头中提取文件名，若无则回退到默认名
+  const disposition = resp.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?(.+?)"?$/);
+  const filename = match?.[1] || `${title}.pdf`;
+
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }

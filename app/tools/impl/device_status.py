@@ -1,7 +1,7 @@
 """
-Tool: device_status
+工具：device_status
 
-查询设备/电站的实时运行状态——由 mock 数据层按 station_id 返回不同数据。
+查询设备/电站的实时运行状态——由模拟数据层按 station_id 返回不同数据。
 """
 
 from __future__ import annotations

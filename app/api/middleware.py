@@ -1,18 +1,18 @@
 """
-HTTP middleware layer: session management, rate limiting, request tracing.
+HTTP 中间件层：会话管理、频率限制、请求链路追踪。
 
-Middleware stack order (from outermost to innermost, executed in reverse):
-    1. SecurityHeadersMiddleware  — HSTS, X-Content-Type-Options, CSP, etc.
-    2. CORSMiddleware             — preflight / cross-origin (built-in)
-    3. SessionMiddleware          — assign / validate session_id
-    4. RequestIDMiddleware        — inject X-Request-Id for tracing
-    5. RateLimitMiddleware        — throttle requests per client IP
+中间件栈顺序（从外到内，执行顺序相反）：
+    1. SecurityHeadersMiddleware  — HSTS、X-Content-Type-Options、CSP 等
+    2. CORSMiddleware             — 预检 / 跨域（内置）
+    3. SessionMiddleware          — 分配 / 验证 session_id
+    4. RequestIDMiddleware        — 注入 X-Request-Id 用于链路追踪
+    5. RateLimitMiddleware        — 按客户端 IP 限制请求频率
 
-All custom middleware uses the ASGI pure-ASGI pattern (BaseHTTPMiddleware)
-for compatibility with FastAPI's lifespan and background task handling.
+所有自定义中间件均使用 ASGI 纯模式（BaseHTTPMiddleware），
+以确保与 FastAPI 的生命周期和后台任务处理兼容。
 
-SessionMiddleware and RateLimitMiddleware depend only on config — no agent
-dependency — so they are testable via curl immediately after deployment.
+SessionMiddleware 和 RateLimitMiddleware 仅依赖配置，不依赖 Agent，
+因此部署后即可通过 curl 进行测试。
 """
 
 from __future__ import annotations
@@ -32,19 +32,19 @@ from loguru import logger
 
 
 # ============================================================================
-# SecurityHeadersMiddleware — defensive HTTP headers
+# SecurityHeadersMiddleware — 防御性 HTTP 头部
 # ============================================================================
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """
-    Inject security-related HTTP response headers.
+    注入安全相关的 HTTP 响应头部。
 
-    Headers set:
-        X-Content-Type-Options: nosniff          — prevent MIME sniffing
-        X-Frame-Options: DENY                    — prevent clickjacking
-        X-XSS-Protection: 1; mode=block          — enable XSS filter
-        Strict-Transport-Security: max-age=...    — enforce HTTPS (prod only)
-        Cache-Control: no-store (on API routes)   — prevent caching of responses
+    设置的头部：
+        X-Content-Type-Options: nosniff          — 防止 MIME 嗅探
+        X-Frame-Options: DENY                    — 防止点击劫持
+        X-XSS-Protection: 1; mode=block          — 启用 XSS 过滤器
+        Strict-Transport-Security: max-age=...    — 强制 HTTPS（仅生产环境）
+        Cache-Control: no-store (on API routes)   — 防止缓存 API 响应
     """
 
     async def dispatch(
@@ -52,16 +52,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         response = await call_next(request)
 
-        # Prevent MIME type sniffing
+        # 防止 MIME 类型嗅探
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
 
-        # Prevent clickjacking
+        # 防止点击劫持
         response.headers.setdefault("X-Frame-Options", "DENY")
 
-        # XSS auditor (legacy but doesn't hurt)
+        # XSS 审查器（旧特性但无害）
         response.headers.setdefault("X-XSS-Protection", "1; mode=block")
 
-        # API routes should not be cached
+        # API 路由不应被缓存
         if request.url.path.startswith("/api/"):
             response.headers.setdefault("Cache-Control", "no-store, no-cache, must-revalidate")
 
@@ -69,22 +69,21 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 # ============================================================================
-# SessionMiddleware
+# SessionMiddleware — 会话中间件
 # ============================================================================
 
 class SessionMiddleware(BaseHTTPMiddleware):
     """
-    Assign and validate a session_id for every incoming HTTP request.
+    为每个传入的 HTTP 请求分配并验证 session_id。
 
-    Logic:
-        - Read session_id from the X-Session-Id header.
-        - If missing or not a valid UUID, generate a new UUIDv4.
-        - Inject session_id into request.state for downstream access.
-        - Echo the session_id back in the X-Session-Id response header.
+    逻辑：
+        - 从 X-Session-Id 头部读取 session_id。
+        - 如果缺失或不是有效的 UUID，则生成新的 UUIDv4。
+        - 将 session_id 注入 request.state 供下游使用。
+        - 在 X-Session-Id 响应头部中回传 session_id。
 
-    This enables multi-turn conversation tracking across stateless HTTP requests.
-    WebSocket sessions use the URL path parameter instead and are handled
-    separately in the websocket endpoint.
+    这使得在无状态 HTTP 请求间进行多轮对话追踪成为可能。
+    WebSocket 会话改用 URL 路径参数，在 WebSocket 端点中单独处理。
     """
 
     HEADER_NAME: str = "X-Session-Id"
@@ -94,7 +93,7 @@ class SessionMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         session_id = request.headers.get(self.HEADER_NAME)
 
-        # Validate existing session_id
+        # 验证已有的 session_id
         if session_id:
             try:
                 uuid.UUID(session_id)
@@ -105,35 +104,35 @@ class SessionMiddleware(BaseHTTPMiddleware):
                 )
                 session_id = None
 
-        # Generate new session if needed
+        # 如果必要则生成新会话
         if not session_id:
             session_id = str(uuid.uuid4())
             logger.debug(f"SessionMiddleware: assigned new session_id={session_id}")
 
-        # Inject into request state for downstream handlers
+        # 注入到请求状态中供下游处理器使用
         request.state.session_id = session_id
 
-        # Process the request
+        # 处理请求
         response = await call_next(request)
 
-        # Echo session_id back so clients can persist it
+        # 回传 session_id 以便客户端可以持久化
         response.headers[self.HEADER_NAME] = session_id
 
         return response
 
 
 # ============================================================================
-# RequestIDMiddleware — request tracing
+# RequestIDMiddleware — 请求链路追踪
 # ============================================================================
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
     """
-    Assign a unique X-Request-Id to every request for distributed tracing.
+    为每个请求分配唯一的 X-Request-Id 以实现分布式链路追踪。
 
-    If the client sends an X-Request-Id header, it is validated and reused.
-    Otherwise a new UUIDv4 is generated. The ID is injected into request.state
-    and echoed in the response headers. Loguru's contextualize() scopes log
-    entries with the request ID so every log line is traceable to a request.
+    如果客户端发送了 X-Request-Id 头部，则验证并复用。
+    否则生成新的 UUIDv4。该 ID 被注入 request.state 并在响应头部中回传。
+    Loguru 的 contextualize() 使用请求 ID 限定日志条目的作用域，
+    使得每行日志都可追溯到具体请求。
     """
 
     HEADER_NAME: str = "X-Request-Id"
@@ -143,7 +142,7 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         request_id = request.headers.get(self.HEADER_NAME)
 
-        # Validate incoming request ID
+        # 验证传入的请求 ID
         if request_id:
             try:
                 uuid.UUID(request_id)
@@ -153,41 +152,39 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         if not request_id:
             request_id = str(uuid.uuid4())
 
-        # Store for downstream use
+        # 存储供下游使用
         request.state.request_id = request_id
 
-        # Contextualize all log entries during this request
+        # 在此请求期间为所有日志添加上下文
         with logger.contextualize(request_id=request_id):
             response = await call_next(request)
 
-        # Echo back
+        # 回传请求 ID
         response.headers[self.HEADER_NAME] = request_id
 
         return response
 
 
 # ============================================================================
-# RateLimitMiddleware — sliding window rate limiter
+# RateLimitMiddleware — 滑动窗口频率限制器
 # ============================================================================
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """
-    Per-IP sliding-window rate limiter (in-memory).
+    基于每个 IP 的滑动窗口频率限制器（内存中实现）。
 
-    Tracks request timestamps per client IP. Requests exceeding the
-    configured limit within the window receive a 429 response.
+    追踪每个客户端 IP 的请求时间戳。在窗口内超过配置限制的请求将收到 429 响应。
 
-    Configuration (from Settings):
-        rate_limit_requests:      max requests per window (default 60)
-        rate_limit_window_seconds: window duration in seconds (default 60)
+    配置项（来自 Settings）：
+        rate_limit_requests:      每个窗口最大请求数（默认 60）
+        rate_limit_window_seconds: 窗口时长（秒）（默认 60）
 
-    Note:
-        This is an in-memory implementation suitable for single-worker
-        deployments. For multi-worker setups, replace with a Redis-backed
-        sliding window using sorted sets.
+    注意：
+        这是一个适用于单工作进程部署的内存实现。
+        对于多工作进程环境，请替换为基于 Redis 的有序集合滑动窗口方案。
     """
 
-    # In-memory store: { client_ip: [timestamp, timestamp, ...] }
+    # 内存存储：{ client_ip: [时间戳, 时间戳, ...] }
     _store: dict[str, list[float]] = defaultdict(list)
 
     async def dispatch(
@@ -199,12 +196,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         now = time.time()
         window_start = now - settings.rate_limit_window_seconds
 
-        # Purge expired timestamps for this client
+        # 清除该客户端已过期的时间戳
         self._store[client_ip] = [
             ts for ts in self._store[client_ip] if ts > window_start
         ]
 
-        # Enforce limit
+        # 执行限制
         if len(self._store[client_ip]) >= settings.rate_limit_requests:
             retry_after = int(window_start + settings.rate_limit_window_seconds - now) + 1
             logger.warning(
@@ -221,7 +218,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 headers={"Retry-After": str(retry_after)},
             )
 
-        # Record this request
+        # 记录本次请求
         self._store[client_ip].append(now)
 
         return await call_next(request)

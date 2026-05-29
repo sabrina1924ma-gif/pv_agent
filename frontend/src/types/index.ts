@@ -1,8 +1,8 @@
 /**
- * Shared TypeScript type definitions for the PV Agent frontend.
+ * PV Agent 前端共享 TypeScript 类型定义。
  */
 
-/** A single chat message in the conversation */
+/** 会话中的单条聊天消息 */
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system" | "tool";
@@ -12,13 +12,13 @@ export interface ChatMessage {
   metadata?: Record<string, unknown>;
 }
 
-/** Request body for POST /api/v1/chat */
+/** POST /api/v1/chat 的请求体 */
 export interface ChatRequest {
   message: string;
   station_id?: string;
 }
 
-/** Response from POST /api/v1/chat */
+/** POST /api/v1/chat 的响应 */
 export interface ChatResponse {
   session_id: string;
   message: string;
@@ -27,19 +27,19 @@ export interface ChatResponse {
   tool_results?: Array<Record<string, unknown>>;
 }
 
-/** Single event in the WebSocket stream */
+/** WebSocket 流中的单个事件 */
 export interface StreamEvent {
   event: "token" | "tool_call" | "tool_result" | "done" | "error";
   data: Record<string, unknown>;
 }
 
-/** Token event payload */
+/** Token 事件载荷 */
 export interface TokenEvent extends StreamEvent {
   event: "token";
   data: { token: string };
 }
 
-/** Tool call started */
+/** 工具调用开始 */
 export interface ToolCallEvent extends StreamEvent {
   event: "tool_call";
   data: {
@@ -48,7 +48,7 @@ export interface ToolCallEvent extends StreamEvent {
   };
 }
 
-/** Tool execution finished */
+/** 工具执行完成 */
 export interface ToolResultEvent extends StreamEvent {
   event: "tool_result";
   data: {
@@ -59,7 +59,7 @@ export interface ToolResultEvent extends StreamEvent {
   };
 }
 
-/** Agent finished, includes final report */
+/** Agent 完成，包含最终报告 */
 export interface DoneEvent extends StreamEvent {
   event: "done";
   data: {

@@ -1,7 +1,7 @@
 """
-Tool: fault_detection
+工具：fault_detection
 
-查询故障/告警记录——从 mock 数据层按 station_id + year 获取。
+查询故障/告警记录——从模拟数据层按 station_id + year 获取。
 """
 from __future__ import annotations
 

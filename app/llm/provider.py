@@ -1,17 +1,17 @@
 """
-DeepSeek API LLM provider.
+DeepSeek API LLM 提供者。
 
-Uses langchain-openai's ChatOpenAI pointed at DeepSeek's OpenAI-compatible
-endpoint (https://api.deepseek.com). Supports two operational modes:
-    - Generation mode (temperature=0.3): reasoning and report generation.
-    - Classification mode (temperature=0): fast, deterministic intent routing.
+使用 langchain-openai 的 ChatOpenAI 连接到 DeepSeek 的 OpenAI 兼容接口
+(https://api.deepseek.com)。支持两种运行模式：
+    - 生成模式 (temperature=0.3)：推理和报告生成。
+    - 分类模式 (temperature=0)：快速、确定性的意图路由。
 
-Model options (as of 2026-05):
-    - deepseek-v4-pro  (1.6T/49B MoE): premium reasoning, 500 concurrent
-    - deepseek-v4-flash (284B/13B MoE): high value, 2500 concurrent
-    Both support 1M context window.
+模型选项（截至 2026 年 5 月）：
+    - deepseek-v4-pro  (1.6T/49B MoE)：高级推理，500 并发
+    - deepseek-v4-flash (284B/13B MoE)：高性价比，2500 并发
+    两者均支持 1M 上下文窗口。
 
-API doc: https://api-docs.deepseek.com
+API 文档：https://api-docs.deepseek.com
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from tenacity import (
 
 
 # ============================================================================
-# System Prompts
+# 系统提示词
 # ============================================================================
 
 SYSTEM_PROMPT_CLASSIFICATION = """\
@@ -82,15 +82,14 @@ You have access to tools that can query:
 
 class DeepSeekProvider:
     """
-    Manages DeepSeek API connections via OpenAI-compatible endpoint.
+    通过 OpenAI 兼容接口管理 DeepSeek API 连接。
 
-    Two cached instances:
-        - Primary (generation): moderate temperature for report/reasoning.
-        - Light (classification): temperature=0 for deterministic intent routing.
+    两个缓存实例：
+        - Primary（生成）：中等温度，用于报告/推理。
+        - Light（分类）：temperature=0，用于确定性的意图路由。
 
-    Both go through the same DeepSeek API but with different runtime parameters.
-    The underlying ChatOpenAI client is stateless — model instances are safe to
-    reuse across concurrent requests.
+    两者都通过相同的 DeepSeek API，但使用不同的运行时参数。
+    底层的 ChatOpenAI 客户端是无状态的——模型实例可以安全地在并发请求中重用。
     """
 
     def __init__(self) -> None:
@@ -101,10 +100,10 @@ class DeepSeekProvider:
     @property
     def primary_model(self) -> ChatOpenAI:
         """
-        Primary model for reasoning, generation, and report writing.
+        用于推理、生成和报告编写的主要模型。
 
-        Configured with moderate temperature (~0.3) for coherent but
-        non-deterministic output. Uses the DEFAULT model from settings.
+        配置为中等温度（~0.3），以获得连贯但非确定性的输出。
+        使用设置中的默认模型。
         """
         if self._primary_model is None:
             self._primary_model = self._build_model(
@@ -116,11 +115,11 @@ class DeepSeekProvider:
     @property
     def light_model(self) -> ChatOpenAI:
         """
-        Lightweight classifier: same model, temperature=0 for determinism.
+        轻量级分类器：相同模型，temperature=0 以确保确定性。
 
-        DeepSeek V4 doesn't have separate "light" and "heavy" models — we
-        reuse the same model name but pin temperature to 0 for classification.
-        This gives reproducible intent labels across calls.
+        DeepSeek V4 没有独立的"轻量"和"重量"模型——我们
+        复用相同的模型名称，但将温度固定为 0 用于分类。
+        这样可以跨调用获得可复现的意图标签。
         """
         if self._light_model is None:
             self._light_model = self._build_model(
@@ -135,18 +134,18 @@ class DeepSeekProvider:
         temperature: float,
     ) -> ChatOpenAI:
         """
-        Construct a ChatOpenAI instance pointed at DeepSeek's API.
+        构造指向 DeepSeek API 的 ChatOpenAI 实例。
 
-        DeepSeek's API is OpenAI-compatible: same /v1/chat/completions endpoint,
-        same JSON request/response format. We just swap the base_url and use
-        a DeepSeek model name instead of gpt-4.
+        DeepSeek 的 API 与 OpenAI 兼容：相同的 /v1/chat/completions 端点，
+        相同的 JSON 请求/响应格式。我们只需更换 base_url 并使用
+        DeepSeek 模型名称替代 gpt-4。
 
         Args:
-            model_name: e.g. "deepseek-v4-flash" or "deepseek-v4-pro".
-            temperature: 0.0 (deterministic) to 1.0 (creative).
+            model_name: 例如 "deepseek-v4-flash" 或 "deepseek-v4-pro"。
+            temperature: 0.0（确定性）到 1.0（创造性）。
 
         Returns:
-            Configured ChatOpenAI instance ready for ainvoke() / astream().
+            配置好的 ChatOpenAI 实例，可用于 ainvoke() / astream()。
         """
         logger.info(
             f"Initializing DeepSeek model: {model_name} "
@@ -169,24 +168,24 @@ class DeepSeekProvider:
         temperature: float | None = None,
     ) -> BaseChatModel:
         """
-        Get a model instance, optionally overriding defaults.
+        获取模型实例，可选择覆盖默认参数。
 
         Args:
-            model_name: Override the model. If None, uses settings.deepseek_model.
-            temperature: Override temperature. If None, uses settings.llm_temperature.
+            model_name: 覆盖模型名称。如果为 None，则使用 settings.deepseek_model。
+            temperature: 覆盖温度。如果为 None，则使用 settings.llm_temperature。
 
         Returns:
-            A ChatOpenAI instance (BaseChatModel-compatible).
+            一个 ChatOpenAI 实例（BaseChatModel 兼容）。
 
-        Usage:
-            llm = get_llm()                          # default primary model
-            llm = get_llm(temperature=0)             # deterministic generation
-            llm = get_llm(model_name="deepseek-v4-pro")  # premium reasoning
+        用法:
+            llm = get_llm()                          # 默认主要模型
+            llm = get_llm(temperature=0)             # 确定性生成
+            llm = get_llm(model_name="deepseek-v4-pro")  # 高级推理
         """
         temp = temperature if temperature is not None else self._settings.llm_temperature
         model = model_name or self._settings.deepseek_model
 
-        # Use cached instance if parameters match defaults
+        # 如果参数匹配默认值，使用缓存的实例
         if (
             model == self._settings.deepseek_model
             and temp == self._settings.llm_temperature
@@ -198,12 +197,12 @@ class DeepSeekProvider:
         ):
             return self.light_model
 
-        # Build ad-hoc for non-standard parameters
+        # 对于非标准参数，临时构建
         return self._build_model(model_name=model, temperature=temp)
 
 
 # ------------------------------------------------------------------
-# Singleton accessor
+# 单例访问器
 # ------------------------------------------------------------------
 
 _llm_provider: DeepSeekProvider | None = None
@@ -215,22 +214,22 @@ def get_llm(
     temperature: float | None = None,
 ) -> BaseChatModel:
     """
-    Return a cached LangChain-compatible LLM instance pointed at DeepSeek.
+    返回指向 DeepSeek 的缓存 LangChain 兼容 LLM 实例。
 
-    For default parameters, returns a singleton for connection reuse.
-    For overridden parameters, creates a new instance.
+    对于默认参数，返回单例以重用连接。
+    对于覆盖的参数，创建新实例。
 
     Args:
-        model_name: "deepseek-v4-flash" (default) or "deepseek-v4-pro".
-        temperature: 0.0 (deterministic) to 1.0 (creative). Default 0.3.
+        model_name: "deepseek-v4-flash"（默认）或 "deepseek-v4-pro"。
+        temperature: 0.0（确定性）到 1.0（创造性）。默认 0.3。
 
     Returns:
-        BaseChatModel ready for ainvoke() or astream().
+        可用于 ainvoke() 或 astream() 的 BaseChatModel。
 
-    Examples:
+    示例:
         llm = get_llm()                          # flash, temp=0.3
-        llm = get_llm(temperature=0)             # flash, deterministic
-        llm = get_llm(model_name="deepseek-v4-pro")  # premium reasoning
+        llm = get_llm(temperature=0)             # flash, 确定性
+        llm = get_llm(model_name="deepseek-v4-pro")  # 高级推理
     """
     global _llm_provider
     if _llm_provider is None:
@@ -239,20 +238,18 @@ def get_llm(
 
 
 # ============================================================================
-# Retry wrappers — defense against ThinkingBlock-only responses and transient
-# API failures.
+# 重试包装器——防御 ThinkingBlock-only 响应和临时 API 故障。
 #
-# DeepSeek V4 sometimes returns only a ThinkingBlock (no TextBlock) when
-# the reasoning engine gets stuck. The tenacity retry decorator handles this
-# by retrying up to 3 times with exponential backoff.
+# DeepSeek V4 有时在推理引擎卡住时只返回 ThinkingBlock（无 TextBlock）。
+# tenacity 重试装饰器通过最多重试 3 次并采用指数退避来处理此问题。
 # ============================================================================
 
 class EmptyResponseError(Exception):
-    """Raised when the LLM returns no usable text content."""
+    """当 LLM 返回无可用的文本内容时抛出。"""
 
 
 def _extract_content(msg: AIMessage) -> str:
-    """Extract text content from an AIMessage. Raises EmptyResponseError if empty."""
+    """从 AIMessage 中提取文本内容。如果为空则抛出 EmptyResponseError。"""
     content = msg.content
     if isinstance(content, str) and content.strip():
         return content
@@ -271,18 +268,18 @@ def _extract_content(msg: AIMessage) -> str:
 )
 async def ainvoke_with_retry(messages: list[BaseMessage], temperature: float | None = None) -> str:
     """
-    Call the LLM with retry on empty responses or transient errors.
+    调用 LLM，在空响应或临时错误时重试。
 
     Args:
-        messages: List of LangChain messages (SystemMessage, HumanMessage, etc.).
-        temperature: Override temperature (None = use default 0.3).
+        messages: LangChain 消息列表（SystemMessage、HumanMessage 等）。
+        temperature: 覆盖温度（None = 使用默认 0.3）。
 
     Returns:
-        The text content of the LLM response.
+        LLM 响应的文本内容。
 
     Raises:
-        EmptyResponseError: After 3 retries, if LLM still returns no text.
-        Exception: Other errors that aren't caught by the retry filter.
+        EmptyResponseError: 重试 3 次后，LLM 仍未返回文本。
+        Exception: 未被重试过滤器捕获的其他错误。
     """
     llm = get_llm(temperature=temperature)
     response = await llm.ainvoke(messages)
@@ -294,20 +291,20 @@ async def astream_with_retry(
     temperature: float | None = None,
 ) -> AsyncIterator[str]:
     """
-    Stream LLM output with retry on empty responses.
+    流式输出 LLM 结果，在空响应时重试。
 
-    Unlike ainvoke_with_retry, streaming output is yielded token-by-token.
-    If all retries fail, raises EmptyResponseError.
+    与 ainvoke_with_retry 不同，流式输出逐个 token 地生成。
+    如果所有重试都失败，则抛出 EmptyResponseError。
 
     Args:
-        messages: List of LangChain messages.
-        temperature: Override temperature (None = use default 0.3).
+        messages: LangChain 消息列表。
+        temperature: 覆盖温度（None = 使用默认 0.3）。
 
     Yields:
-        Text tokens from the LLM, one per chunk.
+        LLM 的文本 token，每个 chunk 一个。
 
     Raises:
-        EmptyResponseError: After 3 retries, if no tokens were produced.
+        EmptyResponseError: 重试 3 次后，仍未生成任何 token。
     """
     last_exception: Exception | None = None
 

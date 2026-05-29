@@ -1,18 +1,18 @@
 """
-数据访问层 (Repository Pattern)。
+数据访问层（Repository 模式）。
 
 每个 Repository 封装对一张表的 CRUD 操作，接收 AsyncSession 作为构造参数。
 Session 的生命周期由调用方控制（FastAPI Depends 或 agent node 手动管理）。
 
 分层原因:
-    - agent node 不应该写原生 SQL: 换数据库或换 ORM 时只改这层
-    - 业务逻辑与存储细节解耦: intent_router 只管 "存一条消息"，不关心是 postgres 还是 redis
-    - 测试友好: 注入 Mock Repository 即可单元测试 agent 逻辑
+    - agent node 不应该写原生 SQL：更换数据库或 ORM 时只需修改这一层
+    - 业务逻辑与存储细节解耦：intent_router 只管"存一条消息"，不关心是 PostgreSQL 还是 Redis
+    - 测试友好：注入 Mock Repository 即可对 agent 逻辑进行单元测试
 
 设计决策:
-    - save_turn() 同时写 Redis + PostgreSQL: 热数据双写，读优先从 Redis 取
-    - flush() 而非 commit(): session 的 commit 由上层 DatabaseManager 统一管理
-    - 所有方法都是 async: 数据库 I/O 不阻塞事件循环
+    - save_turn() 同时写 Redis + PostgreSQL：热数据双写，读优先从 Redis 取
+    - flush() 而非 commit()：session 的 commit 由上层 DatabaseManager 统一管理
+    - 所有方法都是 async：数据库 I/O 不阻塞事件循环
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ class ChatHistoryRepository:
     聊天消息的持久化操作。
 
     两个数据源:
-        1. Redis (热):  最近 24h 的消息，用于 agent graph 的 load_history 节点
-        2. PostgreSQL (冷): 全量消息，用于审计、分析、长期检索
+        1. Redis（热缓存）：最近 24 小时的消息，用于 agent graph 的 load_history 节点
+        2. PostgreSQL（冷存储）：全量消息，用于审计、分析和长期检索
 
     典型调用链:
         用户发消息 → router 收到请求

@@ -26,7 +26,7 @@ from app.config import get_settings
 from loguru import logger
 
 # 导入触发工具注册
-import app.tools.impl  # noqa: F401 — side-effect import for TOOL_REGISTRY
+import app.tools.impl  # noqa: F401 — 副作用导入，触发 TOOL_REGISTRY 注册
 from app.tools.decorator import TOOL_REGISTRY
 
 

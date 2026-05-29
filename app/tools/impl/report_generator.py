@@ -1,10 +1,11 @@
 """
-Tool: report_generator
+工具：report_generator
 
-聚合电站多维度数据为结构化报告负载——从 mock 数据层汇总。
+聚合电站多维度数据为结构化报告负载——从模拟数据层汇总。
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -46,9 +47,14 @@ async def report_generator(
                               "report_type": report_type, "source": "mock"},
         }
 
-    power = get_power_data(station_id, year)
-    faults = get_fault_data(station_id, f"{year}-01-01", f"{year}-12-31")
-    life = mock_life(station_id)
+    # 并发获取发电、故障、健康三维度数据
+    # 使用 asyncio.to_thread 并行执行三个同步 mock 查询；
+    # 当底层 mock 替换为异步 I/O 后，去掉 .to_thread() 即可
+    power, faults, life = await asyncio.gather(
+        asyncio.to_thread(get_power_data, station_id, year),
+        asyncio.to_thread(get_fault_data, station_id, f"{year}-01-01", f"{year}-12-31"),
+        asyncio.to_thread(mock_life, station_id),
+    )
 
     return {
         "station_id": station_id,

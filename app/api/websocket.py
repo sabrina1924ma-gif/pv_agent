@@ -1,34 +1,33 @@
 """
-WebSocket endpoint for streaming agent responses.
+用于流式传输 Agent 响应的 WebSocket 端点。
 
-Implements a bidirectional WebSocket channel that streams LLM tokens,
-tool-call lifecycle events, and node transitions back to the client in
-real time.
+实现一个双向 WebSocket 通道，实时将 LLM 令牌、
+工具调用生命周期事件和节点转换推送给客户端。
 
-Event pipeline:
+事件管线：
     astream_graph() (streaming.py) → StreamEvent → WebSocket JSON
 
-The astream_graph() generator yields these event types:
-    thinking      — immediate (<10ms), signals processing has started
-    node_start    — entering a graph node (load_history, intent_router, ...)
-    node_complete — exiting a graph node
-    tool_start    — about to invoke a tool function
-    tool_complete — tool function returned (success or failure)
-    token         — LLM produced a text token (buffered, ~20 chars or newline)
-    done          — graph execution complete, final state available
-    error         — unrecoverable error during processing
+astream_graph() 生成器产生以下事件类型：
+    thinking      — 即时（<10ms），表示处理已开始
+    node_start    — 进入图节点（load_history、intent_router...）
+    node_complete — 退出图节点
+    tool_start    — 即将调用工具函数
+    tool_complete — 工具函数返回（成功或失败）
+    token         — LLM 生成文本令牌（缓冲，约 20 字符或换行）
+    done          — 图执行完成，最终状态可用
+    error         — 处理过程中出现不可恢复的错误
 
-Each is dispatched to the WebSocket as a JSON message with {event, data}.
+每个事件以 {event, data} 格式的 JSON 消息分发给 WebSocket。
 
-Behind the scenes, astream_graph() uses LangGraph's ainvoke + LangChain's
-astream (ChatOpenAI streaming=True) + the contextvar callback system wired
-into every node. The LLM tokens flow through `on_chat_model_stream` at the
-LangChain level and are re-emitted as our StreamEvent "token" events.
+在幕后，astream_graph() 使用 LangGraph 的 ainvoke + LangChain 的
+astream (ChatOpenAI streaming=True) + 注入到每个节点的
+contextvar 回调系统。LLM 令牌通过 LangChain 层的 `on_chat_model_stream`
+流动，并作为我们的 StreamEvent "token" 事件重新发出。
 
-Protocol (Client → Server):
+协议（客户端 → 服务器）：
     {"content": "...", "station_id": "..."}
 
-Protocol (Server → Client):
+协议（服务器 → 客户端）：
     {"event": "connected",     "data": {"session_id": "..."}}
     {"event": "thinking",      "data": {"message": "..."}}
     {"event": "node_start",    "data": {"node": "...", "message": "..."}}
@@ -54,31 +53,31 @@ from app.agent.schema import AgentState
 from app.agent.streaming import astream_graph
 from loguru import logger
 
-# Heartbeat interval: send a ping if no messages for this many seconds.
-# Browsers typically timeout idle WebSocket connections after 60s, so 30s
-# gives a comfortable safety margin.
+# 心跳间隔：如果在此秒数内没有消息则发送 ping。
+# 浏览器通常在 60 秒后超时空闲 WebSocket 连接，因此 30 秒
+# 提供了舒适的保险余量。
 HEARTBEAT_SECONDS = 30
 
 
 # ============================================================================
-# Main WebSocket handler
+# 主 WebSocket 处理器
 # ============================================================================
 
 async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     """
-    WebSocket endpoint for streaming agent interactions.
+    WebSocket 端点，用于流式 Agent 交互。
 
-    Lifecycle per connection:
-        1. Accept handshake, send welcome event, start heartbeat task.
-        2. Loop: receive a user message, run the graph via astream_graph(),
-           dispatch every StreamEvent to the client as JSON.
-        3. On disconnect / error, cancel heartbeat, clean up and close.
+    每个连接的生命周期：
+        1. 接受握手，发送欢迎事件，启动心跳任务。
+        2. 循环：接收用户消息，通过 astream_graph() 运行图，
+           将每个 StreamEvent 以 JSON 格式分发给客户端。
+        3. 断开连接 / 出错时，取消心跳，清理并关闭。
 
-    Args:
-        websocket: FastAPI WebSocket connection.
-        session_id: Extracted from URL path /ws/{session_id}.
+    参数：
+        websocket: FastAPI WebSocket 连接。
+        session_id: 从 URL 路径 /ws/{session_id} 中提取。
     """
-    # --- 1. Accept connection ---
+    # --- 1. 接受连接 ---
     await websocket.accept()
     logger.info(f"WebSocket connected: session={session_id}")
     await websocket.send_json({
@@ -86,18 +85,18 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         "data": {"session_id": session_id},
     })
 
-    # --- 1b. Start heartbeat task ---
+    # --- 1b. 启动心跳任务 ---
     _stop_heartbeat = asyncio.Event()
     _heartbeat_task = asyncio.create_task(
         _heartbeat(websocket, _stop_heartbeat, session_id)
     )
 
     try:
-        # --- 2. Message loop ---
+        # --- 2. 消息循环 ---
         while True:
             raw = await websocket.receive_text()
 
-            # Parse incoming
+            # 解析传入消息
             try:
                 payload: dict[str, Any] = json.loads(raw)
             except json.JSONDecodeError:
@@ -122,29 +121,29 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                 f"len={len(message_text)}"
             )
 
-            # --- 3. Build initial state ---
+            # --- 3. 构建初始状态 ---
             initial_state: AgentState = {
                 "messages": [HumanMessage(content=message_text)],
                 "session_id": session_id,
                 "station_id": station_id,
             }
 
-            # --- 4. Stream graph execution to WebSocket ---
+            # --- 4. 将图执行结果流式传输到 WebSocket ---
             t0 = time.monotonic()
             emitted_tokens: int = 0
 
             async for se in astream_graph(initial_state):
-                # Convert StreamEvent → WebSocket JSON message
+                # 将 StreamEvent 转换为 WebSocket JSON 消息
                 ws_event = _stream_event_to_ws(se)
 
-                # Track tokens for the final summary
+                # 追踪令牌数量用于最终摘要
                 if se.type == "token" and se.content:
                     emitted_tokens += 1
 
-                # Send to client (this also serves as implicit heartbeat)
+                # 发送给客户端（同时充当隐式心跳）
                 await websocket.send_json(ws_event)
 
-            # --- 5. Final summary log ---
+            # --- 5. 最终摘要日志 ---
             elapsed_ms = (time.monotonic() - t0) * 1000
             logger.info(
                 f"WS done: session={session_id} tokens={emitted_tokens} "
@@ -169,7 +168,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         await websocket.close(code=1011, reason="Internal server error")
 
     finally:
-        # --- Cleanup: stop heartbeat ---
+        # --- 清理：停止心跳 ---
         _stop_heartbeat.set()
         _heartbeat_task.cancel()
         try:
@@ -179,7 +178,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
 
 
 # ============================================================================
-# Heartbeat — prevents browser/proxy from closing idle connections
+# 心跳 — 防止浏览器/代理关闭空闲连接
 # ============================================================================
 
 async def _heartbeat(
@@ -188,9 +187,9 @@ async def _heartbeat(
     session_id: str,
 ) -> None:
     """
-    Send a periodic ping to keep the WebSocket alive.
+    发送周期性 ping 以保持 WebSocket 连接活跃。
 
-    Runs until `stop` is set or the websocket is disconnected.
+    一直运行直到 `stop` 被设置或 WebSocket 断开连接。
     """
     try:
         while not stop.is_set():
@@ -199,19 +198,19 @@ async def _heartbeat(
                 await websocket.send_json({"event": "ping"})
                 logger.debug(f"WS heartbeat: session={session_id}")
     except Exception:
-        # Connection closed — expected, don't log as error
+        # 连接已关闭——预期行为，不记录为错误
         pass
 
 
 # ============================================================================
-# StreamEvent → WebSocket JSON mapping
+# StreamEvent → WebSocket JSON 映射
 # ============================================================================
 
 def _stream_event_to_ws(se: Any) -> dict[str, Any]:
     """
-    Convert a StreamEvent from astream_graph() to a WebSocket JSON message.
+    将 astream_graph() 中的 StreamEvent 转换为 WebSocket JSON 消息。
 
-    Event type mapping:
+    事件类型映射：
         thinking      → {"event": "thinking", ...}
         node_start    → {"event": "node_start", ...}
         node_complete → {"event": "node_end", ...}
@@ -295,7 +294,7 @@ def _stream_event_to_ws(se: Any) -> dict[str, Any]:
             },
         }
 
-    # Fallback: unknown event types
+    # 降级：未知事件类型
     return {
         "event": "unknown",
         "data": {"type": etype, "content": se.content or ""},

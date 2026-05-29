@@ -1,11 +1,10 @@
 """
-Tool registration decorator.
+工具注册装饰器。
 
-Provides a @tool decorator that registers async functions as callable tools
-in a global registry. Tools registered this way are automatically discoverable
-by the tool_executor node based on the intent→tool mapping.
+提供 @tool 装饰器，将异步函数注册为全局注册表中的可调用工具。
+通过此方式注册的工具可被 tool_executor 节点基于 intent→tool 映射自动发现。
 
-Usage:
+用法:
     from app.tools import tool
 
     @tool(name="device_status", description="查询设备实时状态")
@@ -20,28 +19,28 @@ from typing import Any, TypeVar
 
 from loguru import logger
 
-# Generic type for async tool functions
+# 异步工具函数的通用类型
 F = TypeVar("F", bound=Callable[..., Coroutine[Any, Any, Any]])
 
-# Global tool registry: { tool_name: callable }
+# 全局工具注册表：{ tool_name: callable }
 TOOL_REGISTRY: dict[str, Callable[..., Coroutine[Any, Any, Any]]] = {}
 
 
 def tool(name: str, description: str = "") -> Callable[[F], F]:
     """
-    Decorator that registers an async function as an invokable tool.
+    装饰器，将异步函数注册为可调用的工具。
 
     Args:
-        name: Unique tool identifier. Used as the key in TOOL_REGISTRY and
-              referenced in the intent→tool mapping in tool_executor.
-        description: Human-readable description of what the tool does.
-                     Used in LLM prompts to describe available tools.
+        name: 唯一工具标识符。用作 TOOL_REGISTRY 中的键，
+              并在 tool_executor 的 intent→tool 映射中引用。
+        description: 工具功能的人类可读描述。
+                     用于 LLM 提示词中描述可用工具。
 
     Returns:
-        The decorated function, unchanged, after registration.
+        注册后的装饰函数，保持不变。
 
-    Example:
-        @tool(name="power_curve", description="Retrieve power output curves")
+    示例:
+        @tool(name="power_curve", description="查询历史发电功率曲线")
         async def get_power_curve(station_id: str, start_date: str, end_date: str) -> dict:
             ...
     """
@@ -52,7 +51,7 @@ def tool(name: str, description: str = "") -> Callable[[F], F]:
 
         TOOL_REGISTRY[name] = fn
 
-        # Attach metadata to the function for introspection
+        # 将元数据附加到函数上，用于内省
         fn._tool_name = name  # type: ignore[attr-defined]
         fn._tool_description = description  # type: ignore[attr-defined]
 
@@ -64,12 +63,12 @@ def tool(name: str, description: str = "") -> Callable[[F], F]:
 
 def list_tools() -> list[dict[str, str]]:
     """
-    Return a list of all registered tools with their metadata.
+    返回所有已注册工具及其元数据的列表。
 
-    Useful for building LLM tool-selection prompts and for introspection.
+    用于构建 LLM 工具选择提示词和内省。
 
     Returns:
-        List of dicts with keys: name, description.
+        包含 name、description 键的字典列表。
     """
     return [
         {

@@ -1,7 +1,7 @@
 """
-Tool: life_assessment
+工具：life_assessment
 
-评估设备健康状态和剩余寿命——从 mock 数据层按 station_id 获取。
+评估设备健康状态和剩余寿命——从模拟数据层按 station_id 获取。
 """
 from __future__ import annotations
 

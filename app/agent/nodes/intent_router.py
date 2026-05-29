@@ -124,13 +124,13 @@ def _resolve_relative_time(text: str) -> tuple[int | None, int | None, str | Non
     elif re.search(r'上季度', text):
         current_q = (now.month - 1) // 3 + 1
         if current_q == 1:
-            # Q4 of last year
+            # 去年第四季度
             start_date = f"{now.year - 1}-10-01"
             end_date = f"{now.year - 1}-12-31"
         else:
             q_start_month = (current_q - 2) * 3 + 1
             start_date = f"{now.year}-{q_start_month:02d}-01"
-            # last day of quarter
+            # 季度末最后一天
             q_end_month = q_start_month + 2
             end_date = f"{now.year}-{q_end_month:02d}-{30 if q_end_month != 12 else 31}"
 

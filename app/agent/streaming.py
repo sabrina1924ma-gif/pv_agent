@@ -99,14 +99,14 @@ async def astream_graph(
 
     total_elapsed = (asyncio.get_event_loop().time() - start_time) * 1000
 
-    # Include final graph result in the done event
+    # 将最终图结果包含在 done 事件中
     result = _graph_result or {}
     done_event = StreamEvent(
         type="done",
         message="处理完成",
         elapsed_ms=round(total_elapsed, 1),
     )
-    # Attach final state fields for downstream consumers (e.g. WebSocket)
+    # 附加最终状态字段供下游消费者使用（例如 WebSocket）
     if isinstance(result, dict):
         done_event.intent = result.get("intent", "")
         done_event.content = result.get("report_md", "")  # reuse 'content' for report

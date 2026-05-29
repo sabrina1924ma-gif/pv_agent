@@ -1,7 +1,7 @@
 """
-Tool: power_curve
+工具：power_curve
 
-查询历史发电功率曲线——按 station_id + year 从 mock 数据层获取。
+查询历史发电功率曲线——按 station_id + year 从模拟数据层获取。
 """
 from __future__ import annotations
 
