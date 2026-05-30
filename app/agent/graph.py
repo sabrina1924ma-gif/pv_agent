@@ -18,6 +18,7 @@ from langgraph.graph.state import CompiledStateGraph
 from app.agent.schema import AgentState
 from app.agent.nodes.load_history import load_history
 from app.agent.nodes.intent_router import intent_router, route_after_intent
+from app.agent.nodes.retrieve_context import retrieve_context
 from app.agent.nodes.tool_executor import tool_executor
 from app.agent.nodes.report_node import report_node
 from app.config import get_settings
@@ -162,20 +163,24 @@ def build_graph() -> CompiledStateGraph:
 
         intent_router：
             调用 LLM 对用户意图进行分类。设置 state.intent。
-            根据意图通过条件边路由到 tool_executor 或 report_node。
+
+        retrieve_context：
+            RAG 双路检索 — 知识库（设备手册/故障码/规程）
+            + 长期记忆（用户历史会话摘要）。
+            设置 state.retrieved_docs 和 state.retrieved_memories。
 
         tool_executor：
             根据分类后的意图并发调度一个或多个工具调用。
             在 state.tool_results 中累积结果。
 
         report_node：
-            聚合所有消息和工具结果，发送给 LLM 生成最终 Markdown 报告。
+            聚合所有消息、工具结果和 RAG 上下文，发送给 LLM 生成 Markdown 报告。
             设置 state.report_md。
 
     边的路由：
-        START -> load_history -> intent_router
-        intent_router -> tool_executor  （如需工具）
-        intent_router -> report_node    （如无需工具，例如普通聊天）
+        START -> load_history -> intent_router -> retrieve_context
+        retrieve_context -> tool_executor  （如需工具）
+        retrieve_context -> report_node     （如无需工具，例如普通聊天）
         tool_executor -> report_node
         report_node -> END
 
@@ -190,6 +195,7 @@ def build_graph() -> CompiledStateGraph:
     # 节点
     workflow.add_node("load_history", load_history)
     workflow.add_node("intent_router", intent_router)
+    workflow.add_node("retrieve_context", retrieve_context)
     workflow.add_node("tool_executor", tool_executor)
     workflow.add_node("report_node", report_node)
 
@@ -201,11 +207,14 @@ def build_graph() -> CompiledStateGraph:
     # load_history -> intent_router（始终）
     workflow.add_edge("load_history", "intent_router")
 
-    # intent_router 有条件分支：
+    # intent_router -> retrieve_context（始终，RAG 检索在意图分类之后）
+    workflow.add_edge("intent_router", "retrieve_context")
+
+    # retrieve_context 有条件分支：
     #   - "needs_tools"   -> tool_executor
     #   - "no_tools"      -> report_node（直接）
     workflow.add_conditional_edges(
-        "intent_router",
+        "retrieve_context",
         route_after_intent,
         {
             "needs_tools": "tool_executor",

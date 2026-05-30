@@ -22,7 +22,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
@@ -37,6 +37,50 @@ from app.api.schemas import (
 from loguru import logger
 
 api_router = APIRouter(tags=["Agent"])
+
+
+# ============================================================================
+# 共享工具函数
+# ============================================================================
+
+
+def _schedule_memory_indexing(
+    user_query: str,
+    assistant_response: str,
+    user_id: str,
+    session_id: str,
+    intent: str = "",
+    tools_used: list[str] | None = None,
+) -> None:
+    """
+    触发长期记忆索引（fire-and-forget）。
+
+    在 asyncio 后台任务中运行，不阻塞 HTTP/WS 响应。
+    失败时静默降级——索引失败不影响主流程。
+    """
+    import asyncio
+
+    async def _do_index() -> None:
+        try:
+            from app.rag.memory_indexer import MemoryIndexer
+
+            indexer = MemoryIndexer()
+            await indexer.index_turn(
+                user_query=user_query,
+                assistant_response=assistant_response,
+                user_id=user_id,
+                session_id=session_id,
+                intent=intent,
+                tools_used=tools_used or [],
+            )
+        except Exception:
+            logger.warning("Memory indexing skipped (RAG not available)")
+
+    try:
+        asyncio.create_task(_do_index())
+    except RuntimeError:
+        # 没有运行中的 event loop（测试环境等）
+        pass
 
 
 # ============================================================================
@@ -213,6 +257,16 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
                     )
     except Exception:
         logger.exception("Failed to persist chat turn")
+
+    # --- 长期记忆索引（RAG）---
+    _schedule_memory_indexing(
+        user_query=body.message,
+        assistant_response=report_md or summary,
+        user_id=str(user.user_id),
+        session_id=session_id,
+        intent=intent or "",
+        tools_used=[r["tool_name"] for r in (tool_results or [])],
+    )
 
     return ChatResponse(
         session_id=session_id,
@@ -561,3 +615,152 @@ async def add_memory_note(
     except Exception:
         logger.exception("Failed to add memory note")
         raise HTTPException(status_code=500, detail="添加失败")
+
+
+# ============================================================================
+# RAG 管理端点
+# ============================================================================
+
+rag_router = APIRouter(tags=["RAG"], prefix="/rag")
+
+
+class IngestDocumentsRequest(BaseModel):
+    """文档导入请求。"""
+
+    path: str = Field(
+        ...,
+        description="文件或目录的绝对路径",
+        examples=["app/data/documents/inverter_manual.md"],
+    )
+    doc_type: str = Field(
+        default="manual",
+        description="文档类型: manual | fault_codes | procedure | ticket | other",
+    )
+    clear_existing: bool = Field(
+        default=False,
+        description="是否先清除同 source 的已有文档",
+    )
+
+
+class IngestDocumentsResponse(BaseModel):
+    """文档导入响应。"""
+
+    status: str
+    files_processed: int
+    chunks_ingested: int
+
+
+@rag_router.post("/ingest", response_model=IngestDocumentsResponse)
+async def ingest_documents(
+    body: IngestDocumentsRequest,
+) -> IngestDocumentsResponse:
+    """
+    向知识库导入文档。
+
+    支持单个文件或整个目录。导入后自动分块、embedding 并存入 Chroma。
+
+    调用方式:
+        POST /api/v1/rag/ingest
+        {
+            "path": "app/data/documents/inverter_manual.md",
+            "doc_type": "manual"
+        }
+    """
+    from pathlib import Path
+
+    from app.rag.document_loader import DocumentLoader
+
+    loader = DocumentLoader()
+    target = Path(body.path)
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"路径不存在: {body.path}")
+
+    try:
+        if target.is_file():
+            chunks = loader.load_file(str(target), doc_type=body.doc_type)
+            files_processed = 1
+        elif target.is_dir():
+            chunks = loader.load_directory(str(target), doc_type=body.doc_type)
+            files_processed = sum(
+                1 for _ in target.rglob("*")
+                if _.suffix.lower() in {".txt", ".md", ".pdf", ".csv"}
+            )
+        else:
+            raise HTTPException(status_code=400, detail="路径不是文件也不是目录")
+
+        chunks_ingested = loader.ingest_to_store(
+            chunks, clear_existing=body.clear_existing
+        )
+
+        logger.info(
+            f"RAG ingest: {files_processed} files → {chunks_ingested} chunks"
+        )
+
+        return IngestDocumentsResponse(
+            status="ok",
+            files_processed=files_processed,
+            chunks_ingested=chunks_ingested,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"RAG ingest failed: {e}")
+        raise HTTPException(status_code=500, detail=f"导入失败: {e}")
+
+
+@rag_router.get("/stats")
+async def get_rag_stats() -> dict[str, Any]:
+    """
+    获取 RAG 系统统计信息。
+
+    返回知识库和长期记忆的文档/记忆数量。
+    """
+    from app.rag.vector_store import get_vector_store
+
+    store = get_vector_store()
+    return {
+        "knowledge_base": store.get_kb_stats(),
+        "memory": store.get_memory_stats(),
+    }
+
+
+@rag_router.get("/search")
+async def search_knowledge_base(
+    q: str = Query(..., description="检索查询", min_length=1),
+    top_k: int = Query(default=5, ge=1, le=20, description="返回结果数"),
+) -> dict[str, Any]:
+    """
+    在知识库中搜索相关文档。
+
+    用于测试和调试 RAG 检索效果。
+    """
+    from app.rag.kb_retriever import KnowledgeBaseRetriever
+
+    retriever = KnowledgeBaseRetriever()
+    results = await retriever.retrieve(q, top_k=top_k)
+
+    return {
+        "query": q,
+        "results": results,
+    }
+
+
+@rag_router.delete("/documents/{source}")
+async def delete_document(source: str) -> dict[str, Any]:
+    """
+    按 source 名称删除知识库中的文档。
+
+    Args:
+        source: 文档来源名称（导入时的 title/source）。
+    """
+    from app.rag.vector_store import get_vector_store
+
+    store = get_vector_store()
+    deleted = store.delete_kb_document(source)
+
+    return {
+        "status": "ok",
+        "source": source,
+        "chunks_deleted": deleted,
+    }

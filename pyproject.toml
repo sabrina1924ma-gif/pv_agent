@@ -34,6 +34,8 @@ dependencies = [
     "fpdf2>=2.8.0",
     "pyjwt>=2.8.0",
     "cryptography>=42.0.0",
+    "chromadb>=0.5.0",
+    "sentence-transformers>=3.0.0",
 ]
 
 [project.optional-dependencies]

@@ -228,15 +228,91 @@ def _compress_sections(sections: dict) -> dict:
     return result
 
 
+def _build_rag_context_for_chat(
+    retrieved_docs: list[dict] | None,
+    retrieved_memories: list[dict] | None,
+) -> str:
+    """
+    为 general_chat 模式构建 RAG 上下文 prompt。
+
+    在闲聊模式下，将检索到的知识库和历史记忆作为"背景知识"提供给 LLM，
+    帮助它更专业地回答运维相关问题。
+
+    Returns:
+        格式化的 prompt 文本，无结果时返回空字符串。
+    """
+    parts: list[str] = []
+
+    if retrieved_docs:
+        from app.rag.kb_retriever import KnowledgeBaseRetriever
+        kb_retriever = KnowledgeBaseRetriever()
+        kb_text = kb_retriever.format_for_llm(retrieved_docs)
+        if kb_text:
+            parts.append(kb_text)
+
+    if retrieved_memories:
+        from app.rag.memory_retriever import MemoryRetriever
+        mem_retriever = MemoryRetriever()
+        mem_text = mem_retriever.format_for_llm(retrieved_memories)
+        if mem_text:
+            parts.append(mem_text)
+
+    if not parts:
+        return ""
+
+    return (
+        "以下是从知识库和历史对话中检索到的参考信息，请在回答时参考：\n\n"
+        + "\n\n".join(parts)
+        + "\n\n---\n请根据以上参考信息回答用户的问题："
+    )
+
+
 def _build_generation_prompt(
     user_query: str,
     intent: str,
     queried_params: dict,
     tool_results: list[dict],
+    retrieved_docs: list[dict] | None = None,
+    retrieved_memories: list[dict] | None = None,
 ) -> str:
-    """构建发给 LLM 的报告生成 prompt，使用压缩后的工具数据以降低 TTFT。"""
+    """构建发给 LLM 的报告生成 prompt，使用压缩后的工具数据以降低 TTFT。
+
+    新增 RAG 上下文注入:
+        - retrieved_docs: 知识库参考文献片段
+        - retrieved_memories: 用户历史相关对话摘要
+    两者以独立段落注入 prompt，LLM 可将它们作为参考但不允许覆盖工具数据。
+    """
     compressed = _compress_tool_results(tool_results)
     tool_data_json = json.dumps(compressed, ensure_ascii=False, indent=2, default=str)
+
+    # 构建 RAG 上下文段
+    rag_sections: list[str] = []
+
+    if retrieved_docs:
+        from app.rag.kb_retriever import KnowledgeBaseRetriever
+        kb_retriever = KnowledgeBaseRetriever()
+        kb_text = kb_retriever.format_for_llm(retrieved_docs)
+        if kb_text:
+            rag_sections.append(kb_text)
+
+    if retrieved_memories:
+        from app.rag.memory_retriever import MemoryRetriever
+        mem_retriever = MemoryRetriever()
+        mem_text = mem_retriever.format_for_llm(retrieved_memories)
+        if mem_text:
+            rag_sections.append(mem_text)
+
+    rag_context = "\n\n".join(rag_sections) if rag_sections else ""
+    rag_instruction = ""
+
+    if rag_context:
+        rag_instruction = (
+            "\n## Reference Knowledge & Historical Context\n"
+            "The following is retrieved from the knowledge base and your past conversations.\n"
+            "Use this as reference for recommendations and best practices, "
+            "but prioritize tool data over reference knowledge when there is a conflict.\n\n"
+            f"{rag_context}\n"
+        )
 
     return f"""## User Query
 {user_query}
@@ -249,10 +325,12 @@ def _build_generation_prompt(
 
 ## Tool Results (summary)
 {tool_data_json}
-
+{rag_instruction}
 ## Instructions
 Generate a professional Markdown report based ONLY on the data above.
 Follow ALL anti-hallucination rules strictly.
+When reference knowledge is provided, use it to enrich recommendations
+and troubleshooting suggestions, but never fabricate data numbers.
 REMEMBER: include the MANDATORY "## 数据校验" section at the end.
 
 ## Report
@@ -347,6 +425,8 @@ async def report_node(state: AgentState) -> AgentState:
     tool_results = state.get("tool_results", [])
     session_id = state.get("session_id", "unknown")
     query_params = state.get("query_params", {})
+    retrieved_docs = state.get("retrieved_docs", [])
+    retrieved_memories = state.get("retrieved_memories", [])
 
     # 提取用户问题
     messages = state.get("messages", [])
@@ -361,15 +441,19 @@ async def report_node(state: AgentState) -> AgentState:
         f"tools={len(tool_results)}"
     )
 
-    # --- 无工具结果（general_chat）--- 流式输出
+    # --- 无工具结果（general_chat）--- 流式输出，注入 RAG 上下文
     if not tool_results:
         try:
+            # 构建 RAG 增强的 general_chat prompt
+            rag_context_text = _build_rag_context_for_chat(retrieved_docs, retrieved_memories)
+            chat_messages = [SystemMessage(content=PERSONA_PROMPT)]
+            if rag_context_text:
+                chat_messages.append(HumanMessage(content=rag_context_text))
+            chat_messages.append(HumanMessage(content=user_query))
+
             full_response = ""
             buf = TokenBuffer()
-            async for token in astream_with_retry([
-                SystemMessage(content=PERSONA_PROMPT),
-                HumanMessage(content=user_query),
-            ]):
+            async for token in astream_with_retry(chat_messages):
                 token_str = token if isinstance(token, str) else ""
                 if token_str:
                     full_response += token_str
@@ -382,8 +466,12 @@ async def report_node(state: AgentState) -> AgentState:
             state["report_md"] = f"抱歉，处理请求时出错: {e}"
         return state
 
-    # --- 有工具结果：数据驱动报告 --- 流式输出
-    prompt = _build_generation_prompt(user_query, intent, query_params, tool_results)
+    # --- 有工具结果：数据驱动报告 --- 流式输出，注入 RAG 上下文
+    prompt = _build_generation_prompt(
+        user_query, intent, query_params, tool_results,
+        retrieved_docs=retrieved_docs,
+        retrieved_memories=retrieved_memories,
+    )
     prompt += "\n" + REPORT_CONSTRAINTS  # 追加详细约束，不放 system 里以控制 TTFT
 
     try:

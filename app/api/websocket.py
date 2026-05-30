@@ -58,6 +58,7 @@ from langchain_core.messages import HumanMessage
 from app.agent.schema import AgentState
 from app.agent.streaming import astream_graph
 from app.utils.auth import decode_access_token
+from app.api.router import _schedule_memory_indexing
 from loguru import logger
 
 # 心跳间隔：如果在此秒数内没有消息则发送 ping。
@@ -214,6 +215,16 @@ async def websocket_endpoint(
                         )
             except Exception:
                 logger.exception("Failed to persist WS chat turn")
+
+            # --- 长期记忆索引（RAG）---
+            _schedule_memory_indexing(
+                user_query=message_text,
+                assistant_response=report_md
+                or f"处理完成 ({elapsed_ms:.0f}ms, {emitted_tokens} tokens)",
+                user_id=str(user_id),
+                session_id=session_id,
+                intent=final_intent or "",
+            )
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected: session={session_id} user={user_id}")

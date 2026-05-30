@@ -28,7 +28,7 @@ from app.api.middleware import (
     SessionMiddleware,
 )
 from app.api.auth import auth_router
-from app.api.router import api_router
+from app.api.router import api_router, rag_router
 from app.api.websocket import websocket_endpoint
 from app.agent.graph import get_graph
 from app.config import get_settings
@@ -188,6 +188,7 @@ def create_app() -> FastAPI:
     # --- 路由 ---
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(api_router, prefix="/api/v1")
+    app.include_router(rag_router, prefix="/api/v1")
 
     # --- WebSocket 路由 ---
     app.add_api_websocket_route("/ws/{session_id}", websocket_endpoint)

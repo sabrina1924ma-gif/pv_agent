@@ -25,15 +25,17 @@ class AgentState(TypedDict, total=False):
     中间字段（intent、tool_results 等）由各节点填充。
 
     字段：
-        messages：      完整对话历史。使用 add_messages 注解。
-        session_id：    唯一会话标识（调用时必需）。
-        user_id：       用户 ID（用户隔离，调用时必需）。
-        intent：        分类后的意图标签 → 由 intent_router 设置。
-        tool_results：  工具调用结果 → 由 tool_executor 设置。
-        station_id：    目标电站 ID → 由 intent_router 设置（正则提取）。
-        query_params：  提取的查询参数 → 由 intent_router 设置。
-        report_md：     生成的 Markdown 报告 → 由 report_node 设置。
-        error：         不可恢复时的错误信息 → 由任意节点设置。
+        messages：          完整对话历史。使用 add_messages 注解。
+        session_id：        唯一会话标识（调用时必需）。
+        user_id：           用户 ID（用户隔离，调用时必需）。
+        intent：            分类后的意图标签 → 由 intent_router 设置。
+        tool_results：      工具调用结果 → 由 tool_executor 设置。
+        station_id：        目标电站 ID → 由 intent_router 设置（正则提取）。
+        query_params：      提取的查询参数 → 由 intent_router 设置。
+        report_md：         生成的 Markdown 报告 → 由 report_node 设置。
+        error：             不可恢复时的错误信息 → 由任意节点设置。
+        retrieved_docs：    RAG 检索到的知识库文档片段 → 由 retrieve_context 设置。
+        retrieved_memories： RAG 检索到的历史会话摘要 → 由 retrieve_context 设置。
     """
 
     messages: Annotated[list[BaseMessage], add_messages]
@@ -45,3 +47,5 @@ class AgentState(TypedDict, total=False):
     query_params: dict[str, Any]
     report_md: str | None
     error: str | None
+    retrieved_docs: list[dict[str, Any]]
+    retrieved_memories: list[dict[str, Any]]

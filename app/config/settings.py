@@ -97,6 +97,22 @@ class Settings(BaseSettings):
     langgraph_checkpoint_persist: bool = True
     langgraph_checkpoint_retention_days: int = 30
 
+    # --- RAG (Retrieval-Augmented Generation) ---
+    # Embedding 模型：BAAI/bge-small-zh-v1.5（中文语义，384维，~100MB）
+    rag_embedding_model: str = "BAAI/bge-small-zh-v1.5"
+    rag_embedding_device: str = "cpu"  # cpu | cuda
+    # Chroma 持久化路径（相对于项目根目录）
+    rag_chroma_persist_dir: str = "chroma_db"
+    # 检索配置
+    rag_kb_top_k: int = 5        # 知识库每次检索返回的文档片段数
+    rag_memory_top_k: int = 3    # 长期记忆每次检索返回的历史会话数
+    rag_min_similarity: float = 0.3  # 最低相似度阈值，低于此值的结果丢弃
+    # 文档分块配置
+    rag_chunk_size: int = 500       # 每个文本块的最大字符数
+    rag_chunk_overlap: int = 80     # 相邻块之间的重叠字符数
+    # 长期记忆配置
+    rag_memory_summary_enabled: bool = True  # 是否在每轮对话后生成摘要并索引
+
     @property
     def redis_url(self) -> str:
         """构建 Redis 连接 URL。"""
@@ -118,6 +134,15 @@ class Settings(BaseSettings):
             f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+
+    @property
+    def rag_chroma_path(self) -> str:
+        """返回 Chroma 持久化目录的绝对路径。"""
+        if Path(self.rag_chroma_persist_dir).is_absolute():
+            return self.rag_chroma_persist_dir
+        # 相对于项目根目录（app/config/ 的上两级）
+        root = Path(__file__).resolve().parent.parent.parent
+        return str(root / self.rag_chroma_persist_dir)
 
 
 @lru_cache
