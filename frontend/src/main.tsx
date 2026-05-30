@@ -38,20 +38,29 @@ class ErrorBoundary extends React.Component<
             maxWidth: 600,
             margin: "4rem auto",
             textAlign: "center",
-            fontFamily: "sans-serif",
+            fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+            background: "#060b14",
+            minHeight: "100vh",
           }}
         >
-          <h1 style={{ color: "#dc3545" }}>应用出错了</h1>
-          <p style={{ color: "#666" }}>PV Agent 遇到一个意外错误，请刷新页面重试。</p>
+          <h1 style={{ color: "#ff5252", fontSize: "1.4rem", marginBottom: "0.5rem" }}>
+            应用出错了
+          </h1>
+          <p style={{ color: "#5a7290", fontSize: "0.9rem" }}>
+            PV Agent 遇到一个意外错误，请刷新页面重试。
+          </p>
           <pre
             style={{
-              background: "#f8f9fa",
+              background: "#0d1525",
+              border: "1px solid #1e3050",
+              color: "#b0c4dc",
               padding: "1rem",
               borderRadius: 8,
               fontSize: "0.85rem",
               textAlign: "left",
               overflowX: "auto",
               marginTop: "1rem",
+              fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
             }}
           >
             {this.state.error?.message}
@@ -60,13 +69,15 @@ class ErrorBoundary extends React.Component<
             onClick={() => window.location.reload()}
             style={{
               marginTop: "1rem",
-              padding: "0.5rem 1.5rem",
-              background: "#007bff",
-              color: "white",
+              padding: "0.6rem 1.8rem",
+              background: "linear-gradient(135deg, #0077ff, #0055cc)",
+              color: "#fff",
               border: "none",
               borderRadius: 8,
               cursor: "pointer",
-              fontSize: "1rem",
+              fontSize: "0.95rem",
+              fontWeight: 600,
+              fontFamily: "inherit",
             }}
           >
             刷新页面

@@ -67,3 +67,37 @@ export interface DoneEvent extends StreamEvent {
     intent?: string;
   };
 }
+
+// ============================================================================
+// 会话管理类型
+// ============================================================================
+
+/** 会话摘要（列表用） */
+export interface SessionSummary {
+  session_id: string;
+  title: string;
+  message_count: number;
+  created_at: string | null;
+  last_active: string | null;
+}
+
+/** POST /api/v1/sessions 的响应 */
+export interface SessionCreateResponse {
+  session_id: string;
+  created_at: string;
+}
+
+/** 单条历史消息（从后端加载） */
+export interface MessageItem {
+  id: string;
+  role: string;
+  content: string;
+  intent: string | null;
+  created_at: string;
+}
+
+/** GET /api/v1/sessions/{id}/messages 的响应 */
+export interface SessionMessagesResponse {
+  session_id: string;
+  messages: MessageItem[];
+}

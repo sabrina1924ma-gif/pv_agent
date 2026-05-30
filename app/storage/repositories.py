@@ -263,6 +263,89 @@ class ChatHistoryRepository:
         logger.info(f"Purged {result.rowcount} messages older than {days} days")
         return result.rowcount
 
+    async def list_sessions(
+        self,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """
+        列出所有会话摘要（按最近活跃时间降序）。
+
+        从 chat_history 表中按 session_id 分组，返回每个会话的：
+          - session_id
+          - title（第一条用户消息，截断至 60 字符）
+          - message_count
+          - created_at（第一条消息的时间）
+          - last_active（最后一条消息的时间）
+
+        Args:
+            limit: 返回会话数上限。
+
+        Returns:
+            会话摘要字典列表。
+        """
+        # 子查询：每个 session 的第一条消息（用于 title 和 created_at）
+        first_msg_subq = (
+            select(
+                ChatHistory.session_id,
+                ChatHistory.content,
+                ChatHistory.created_at,
+                func.row_number()
+                .over(
+                    partition_by=ChatHistory.session_id,
+                    order_by=ChatHistory.created_at.asc(),
+                )
+                .label("rn"),
+            )
+            .where(ChatHistory.role == "user")
+            .subquery()
+        )
+
+        first_msg = (
+            select(
+                first_msg_subq.c.session_id,
+                first_msg_subq.c.content.label("first_content"),
+                first_msg_subq.c.created_at.label("first_created_at"),
+            )
+            .where(first_msg_subq.c.rn == 1)
+            .subquery()
+        )
+
+        # 主查询：聚合每个 session 的信息
+        stmt = (
+            select(
+                ChatHistory.session_id,
+                func.min(ChatHistory.created_at).label("created_at"),
+                func.max(ChatHistory.created_at).label("last_active"),
+                func.count().label("message_count"),
+                func.max(first_msg.c.first_content).label("title"),
+            )
+            .outerjoin(
+                first_msg,
+                ChatHistory.session_id == first_msg.c.session_id,
+            )
+            .group_by(ChatHistory.session_id)
+            .order_by(func.max(ChatHistory.created_at).desc())
+            .limit(limit)
+        )
+
+        result = await self._session.execute(stmt)
+        rows = result.all()
+
+        sessions = []
+        for row in rows:
+            title = row.title or ""
+            if len(title) > 60:
+                title = title[:60] + "…"
+            sessions.append({
+                "session_id": row.session_id,
+                "title": title,
+                "message_count": row.message_count,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "last_active": row.last_active.isoformat() if row.last_active else None,
+            })
+
+        return sessions
+
 
 # ============================================================================
 # CheckpointRepository — LangGraph 状态快照

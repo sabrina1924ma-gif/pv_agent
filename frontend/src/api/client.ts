@@ -92,29 +92,32 @@ export async function deleteSession(sessionId: string): Promise<Response> {
   });
 }
 
-/** POST /api/v1/report/pdf — 将 Markdown 报告转换为 PDF 并触发浏览器下载 */
-export async function downloadReportPdf(
-  markdown: string,
-  title: string = "光伏电站报告"
-): Promise<void> {
-  const resp = await fetchWithRetry(`${BASE_URL}/report/pdf`, {
+/** POST /api/v1/sessions — 创建新会话 */
+export async function createSession(): Promise<Response> {
+  return fetchWithRetry(`${BASE_URL}/sessions`, {
     method: "POST",
     headers: buildHeaders(),
-    body: JSON.stringify({ markdown, title }),
   });
+}
 
-  // 从 Content-Disposition 头中提取文件名，若无则回退到默认名
-  const disposition = resp.headers.get("Content-Disposition") || "";
-  const match = disposition.match(/filename="?(.+?)"?$/);
-  const filename = match?.[1] || `${title}.pdf`;
+/** GET /api/v1/sessions — 列出所有会话摘要 */
+export async function listSessions(): Promise<Response> {
+  return fetchWithRetry(`${BASE_URL}/sessions`, {
+    headers: buildHeaders(),
+  });
+}
 
-  const blob = await resp.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+/** GET /api/v1/sessions/{id}/messages — 获取会话消息 */
+export async function getSessionMessages(sessionId: string): Promise<Response> {
+  return fetchWithRetry(`${BASE_URL}/sessions/${sessionId}/messages`, {
+    headers: buildHeaders(),
+  });
+}
+
+/**
+ * 设置当前活跃的会话 ID（持久化到 localStorage）。
+ * 也更新全局会话标识，方便 buildHeaders() 自动带上。
+ */
+export function setActiveSessionId(sessionId: string): void {
+  localStorage.setItem("pv_session_id", sessionId);
 }

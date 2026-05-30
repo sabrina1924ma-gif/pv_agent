@@ -9,13 +9,17 @@ LangGraph 节点内的异步操作（LLM 调用、工具 I/O）通过 asyncio
 协作调度正确参与同一事件循环。
 
 端点：
-    POST   /api/v1/chat               — 非流式聊天，返回完整响应
-    GET    /api/v1/sessions/{id}      — 获取会话元数据
-    DELETE /api/v1/sessions/{id}      — 清除会话上下文
+    POST   /api/v1/chat                   — 非流式聊天，返回完整响应
+    POST   /api/v1/sessions               — 创建新会话
+    GET    /api/v1/sessions               — 列出所有会话摘要
+    GET    /api/v1/sessions/{id}          — 获取单个会话元数据
+    GET    /api/v1/sessions/{id}/messages — 获取会话的聊天记录
+    DELETE /api/v1/sessions/{id}          — 清除会话上下文
 """
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -24,7 +28,6 @@ from pydantic import BaseModel, Field
 
 from app.agent.graph import get_graph
 from app.agent.schema import AgentState
-from app.utils.pdf import markdown_to_pdf
 from loguru import logger
 
 api_router = APIRouter(tags=["Agent"])
@@ -71,22 +74,6 @@ class ChatResponse(BaseModel):
     )
 
 
-class PdfReportRequest(BaseModel):
-    """PDF 报告生成请求。"""
-
-    markdown: str = Field(
-        ...,
-        min_length=1,
-        max_length=100_000,
-        description="Markdown 格式的报告文本",
-    )
-    title: str = Field(
-        default="光伏电站报告",
-        max_length=200,
-        description="PDF 文档标题",
-    )
-
-
 class SessionInfo(BaseModel):
     """对话会话的元数据。"""
 
@@ -99,8 +86,42 @@ class SessionInfo(BaseModel):
     )
 
 
+class SessionSummary(BaseModel):
+    """会话列表中的摘要条目。"""
+
+    session_id: str = Field(..., description="Session identifier")
+    title: str = Field(default="", description="First user message (truncated to 60 chars)")
+    message_count: int = Field(default=0, description="Number of messages in this session")
+    created_at: str | None = Field(default=None, description="Session creation timestamp (ISO 8601)")
+    last_active: str | None = Field(default=None, description="Last message timestamp (ISO 8601)")
+
+
+class SessionCreateResponse(BaseModel):
+    """创建会话的响应。"""
+
+    session_id: str = Field(..., description="Newly created session identifier")
+    created_at: str = Field(..., description="Creation timestamp (ISO 8601)")
+
+
+class MessageItem(BaseModel):
+    """单条聊天消息（用于会话历史回放）。"""
+
+    id: str = Field(..., description="Message unique identifier")
+    role: str = Field(..., description="Message role: user, assistant, system, or tool")
+    content: str = Field(..., description="Full message content")
+    intent: str | None = Field(default=None, description="Classified intent label")
+    created_at: str = Field(..., description="Message creation timestamp (ISO 8601)")
+
+
+class SessionMessagesResponse(BaseModel):
+    """会话消息列表响应。"""
+
+    session_id: str = Field(..., description="Session identifier")
+    messages: list[MessageItem] = Field(default_factory=list, description="Messages in chronological order")
+
+
 # ============================================================================
-# 路由
+# 路由 — 聊天
 # ============================================================================
 
 @api_router.post("/chat", response_model=ChatResponse, status_code=200)
@@ -173,6 +194,114 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
         error=error,
     )
 
+
+# ============================================================================
+# 路由 — 会话管理
+# ============================================================================
+
+@api_router.post("/sessions", response_model=SessionCreateResponse, status_code=201)
+async def create_session(request: Request) -> SessionCreateResponse:
+    """
+    创建一个新的聊天会话。
+
+    生成新的 UUID 作为 session_id 并返回。客户端应将此 ID
+    用于后续的聊天和 WebSocket 连接。
+
+    注意：会话在首次发送消息前不会持久化到数据库。
+    """
+    from datetime import datetime, timezone
+
+    session_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    logger.info(f"Created session {session_id}")
+    return SessionCreateResponse(session_id=session_id, created_at=created_at)
+
+
+@api_router.get("/sessions", response_model=list[SessionSummary])
+async def list_sessions(request: Request) -> list[SessionSummary]:
+    """
+    列出所有会话摘要，按最近活跃时间降序排列。
+
+    从 PostgreSQL 的 chat_history 表中聚合会话信息。
+    若数据库不可用则返回空列表。
+    """
+    logger.info("GET /sessions")
+
+    from app.storage.db import get_db_manager
+    from app.storage.repositories import ChatHistoryRepository
+
+    db = get_db_manager()
+    if not await db.health_check():
+        logger.warning("Database not available — returning empty session list")
+        return []
+
+    try:
+        async with db.session_context() as session:
+            repo = ChatHistoryRepository(session)
+            rows = await repo.list_sessions(limit=50)
+    except Exception:
+        logger.exception("Failed to list sessions")
+        return []
+
+    return [SessionSummary(**row) for row in rows]
+
+
+@api_router.get("/sessions/{session_id}/messages", response_model=SessionMessagesResponse)
+async def get_session_messages(session_id: str, request: Request) -> SessionMessagesResponse:
+    """
+    获取指定会话的完整聊天记录，按时间升序排列。
+
+    用于会话切换时回显历史消息。
+    """
+    from uuid import UUID
+
+    try:
+        UUID(session_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid session_id format: {session_id!r}",
+        )
+
+    logger.info(f"GET /sessions/{session_id}/messages")
+
+    from app.storage.db import get_db_manager
+    from app.storage.repositories import ChatHistoryRepository
+
+    db = get_db_manager()
+    if not await db.health_check():
+        logger.warning("Database not available — returning empty messages")
+        return SessionMessagesResponse(session_id=session_id, messages=[])
+
+    try:
+        async with db.session_context() as session:
+            repo = ChatHistoryRepository(session)
+            records = await repo.get_by_session(session_id, limit=200, offset=0)
+
+        # 按时间升序排列（get_by_session 返回降序）
+        records = list(reversed(records))
+
+        messages = [
+            MessageItem(
+                id=str(r.id),
+                role=r.role,
+                content=r.content,
+                intent=r.intent,
+                created_at=r.created_at.isoformat(),
+            )
+            for r in records
+        ]
+    except Exception:
+        logger.exception(f"Failed to load messages for session {session_id}")
+        return SessionMessagesResponse(session_id=session_id, messages=[])
+
+    return SessionMessagesResponse(session_id=session_id, messages=messages)
+
+
+# ============================================================================
+# 路由 — 会话元数据 & 清理
+# ============================================================================
 
 @api_router.get("/sessions/{session_id}", response_model=SessionInfo)
 async def get_session(session_id: str, request: Request) -> SessionInfo:
@@ -259,57 +388,3 @@ async def clear_session(session_id: str, request: Request) -> dict[str, str]:
             logger.warning(f"Failed to delete PG records for session {session_id}")
 
     return {"status": "ok", "session_id": session_id}
-
-
-# ============================================================================
-# PDF 报告生成
-# ============================================================================
-
-@api_router.post("/report/pdf", status_code=200)
-async def generate_pdf_report(
-    request: Request,
-    body: PdfReportRequest,
-):
-    """
-    将 Markdown 报告转换为可下载的 PDF 文件。
-
-    接收 Markdown 格式的报告文本，将其渲染为带样式的 PDF
-    （A4 纸张、中文字体），并通过 HTTP 响应直接返回文件字节流。
-
-    返回：
-        Content-Type: application/pdf
-        Content-Disposition: attachment; filename="report.pdf"
-    """
-    from fastapi.responses import Response
-
-    session_id: str = getattr(request.state, "session_id", "unknown")
-    logger.info(
-        f"POST /report/pdf session={session_id} "
-        f"title={body.title!r} md_len={len(body.markdown)}"
-    )
-
-    try:
-        pdf_bytes = await markdown_to_pdf(
-            markdown_text=body.markdown,
-            title=body.title,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except RuntimeError as exc:
-        logger.exception("PDF generation failed")
-        raise HTTPException(status_code=500, detail=str(exc))
-
-    # 文件名安全处理：移除可能破坏文件名的字符
-    safe_title = "".join(
-        c for c in body.title if c.isalnum() or c in (" ", "-", "_")
-    ).strip() or "report"
-    filename = f"{safe_title}.pdf"
-
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Content-Length": str(len(pdf_bytes)),
-        },
-    )
