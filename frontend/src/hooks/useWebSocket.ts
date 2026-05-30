@@ -1,10 +1,11 @@
 import { useRef, useState, useCallback, useEffect } from "react";
 import type { StreamEvent } from "../types";
+import { getToken } from "../api/client";
 
 /** 单条工具调用的状态 */
 export interface ToolCallState {
   toolName: string;
-  status?: "ok" | "error";
+  status?: "ok" | "error" | "pending";
   elapsedMs?: number;
 }
 
@@ -64,7 +65,10 @@ export function useWebSocket(sessionId: string) {
     }
 
     const wsBase = import.meta.env.VITE_WS_BASE_URL || `ws://localhost:8000`;
-    const url = `${wsBase}/ws/${sessionId}`;
+    const token = getToken();
+    const url = token
+      ? `${wsBase}/ws/${sessionId}?token=${encodeURIComponent(token)}`
+      : `${wsBase}/ws/${sessionId}`;
     const ws = new WebSocket(url);
 
     ws.onopen = () => {
@@ -87,14 +91,14 @@ export function useWebSocket(sessionId: string) {
         case "tool_call":
           setToolCalls((prev) => [
             ...prev,
-            { toolName: msg.data.tool_name as string },
+            { toolName: msg.data.tool_name as string, status: "pending" },
           ]);
           break;
         case "tool_result":
           setToolCalls((prev) => {
             const next = [...prev];
             for (let i = next.length - 1; i >= 0; i--) {
-              if (!next[i].status) {
+              if (next[i].status === "pending") {
                 next[i] = {
                   ...next[i],
                   status: msg.data.status as "ok" | "error",
@@ -116,8 +120,19 @@ export function useWebSocket(sessionId: string) {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event: CloseEvent) => {
       setIsConnected(false);
+      // 认证失败（4001）：不重连，清除认证，跳转登录
+      if (event.code === 4001) {
+        setLastError("认证已过期，请重新登录");
+        // 清除认证信息并重定向
+        const { clearAuth } = require("../api/client");
+        clearAuth();
+        if (typeof window !== "undefined") {
+          window.location.href = "/login";
+        }
+        return;
+      }
       // 仅在非主动断开时尝试自动重连
       if (!intentionalCloseRef.current) {
         scheduleReconnect();

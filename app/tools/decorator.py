@@ -54,8 +54,6 @@ def tool(name: str, description: str = "") -> Callable[[F], F]:
         # 将元数据附加到函数上，用于内省
         fn._tool_name = name  # type: ignore[attr-defined]
         fn._tool_description = description  # type: ignore[attr-defined]
-
-        logger.debug(f"Registered tool: '{name}' — {description or 'no description'}")
         return fn
 
     return wrapper

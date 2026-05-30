@@ -8,11 +8,18 @@ const RETRY_DELAY_MS = 1000;
 
 // --- 请求拦截器 ---
 
-function buildHeaders(): Record<string, string> {
-  return {
+function buildHeaders(authRequired = true): Record<string, string> {
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "X-Session-Id": getSessionId(),
   };
+  if (authRequired) {
+    const token = getToken();
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+  }
+  return headers;
 }
 
 // --- 响应拦截器 ---
@@ -120,4 +127,94 @@ export async function getSessionMessages(sessionId: string): Promise<Response> {
  */
 export function setActiveSessionId(sessionId: string): void {
   localStorage.setItem("pv_session_id", sessionId);
+}
+
+// ============================================================================
+// 认证 API
+// ============================================================================
+
+const TOKEN_KEY = "pv_token";
+const USER_KEY = "pv_user";
+
+/** 获取存储的 JWT token */
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+/** 设置 JWT token 和用户信息 */
+export function setAuth(token: string, user: Record<string, unknown>): void {
+  localStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
+/** 清除认证信息（登出） */
+export function clearAuth(): void {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+  localStorage.removeItem("pv_session_id");
+}
+
+/** 获取存储的用户信息 */
+export function getStoredUser(): Record<string, unknown> | null {
+  try {
+    const raw = localStorage.getItem(USER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 检查是否已登录（有 token） */
+export function isAuthenticated(): boolean {
+  return !!getToken();
+}
+
+/** POST /api/v1/auth/login — 用户名+密码登录 */
+export async function login(
+  username: string,
+  password: string
+): Promise<Response> {
+  return fetchWithRetry(`${BASE_URL}/auth/login`, {
+    method: "POST",
+    headers: buildHeaders(false),
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+/** POST /api/v1/auth/register — 注册新用户 */
+export async function register(
+  username: string,
+  password: string
+): Promise<Response> {
+  return fetchWithRetry(`${BASE_URL}/auth/register`, {
+    method: "POST",
+    headers: buildHeaders(false),
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+/** GET /api/v1/auth/me — 获取当前用户信息 */
+export async function getCurrentUser(): Promise<Response> {
+  return fetchWithRetry(`${BASE_URL}/auth/me`, {
+    headers: buildHeaders(true),
+  });
+}
+
+/** GET /api/v1/profile — 获取用户画像 */
+export async function getUserProfile(): Promise<Response> {
+  return fetchWithRetry(`${BASE_URL}/profile`, {
+    headers: buildHeaders(true),
+  });
+}
+
+/** POST /api/v1/profile/memory — 添加记忆笔记 */
+export async function addMemoryNote(
+  content: string,
+  source = "user"
+): Promise<Response> {
+  return fetchWithRetry(`${BASE_URL}/profile/memory`, {
+    method: "POST",
+    headers: buildHeaders(true),
+    body: JSON.stringify({ content, source }),
+  });
 }

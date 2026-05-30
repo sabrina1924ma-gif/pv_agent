@@ -28,6 +28,12 @@ from pydantic import BaseModel, Field
 
 from app.agent.graph import get_graph
 from app.agent.schema import AgentState
+from app.api.dependencies import get_current_user, get_optional_user, AuthUser
+from app.api.schemas import (
+    AddMemoryNoteRequest,
+    UpdateProfileRequest,
+    UserProfileResponse,
+)
 from loguru import logger
 
 api_router = APIRouter(tags=["Agent"])
@@ -127,22 +133,19 @@ class SessionMessagesResponse(BaseModel):
 @api_router.post("/chat", response_model=ChatResponse, status_code=200)
 async def chat(request: Request, body: ChatRequest) -> ChatResponse:
     """
-    非流式聊天端点。
+    非流式聊天端点（需要认证）。
 
     通过完整的 LangGraph Agent 管线处理用户消息并同步返回完整响应。
-
-    管线：load_history → intent_router → (tool_executor?) → report_node → respond
-
-    图仅编译一次并被缓存（参见 get_graph()），因此重复调用
-    复用同一个图实例。除非配置了 LangGraph 检查点，
-    否则调用间不会持久化状态。
     """
+    # 获取当前用户（强制认证）
+    user = await get_current_user(request)
+
     session_id: str = getattr(request.state, "session_id", "unknown")
     request_id: str = getattr(request.state, "request_id", "unknown")
 
     logger.info(
-        f"POST /chat session={session_id} station={body.station_id} "
-        f"msg_len={len(body.message)}"
+        f"POST /chat user={user.user_id} session={session_id} "
+        f"station={body.station_id} msg_len={len(body.message)}"
     )
 
     # ------------------------------------------------------------------
@@ -152,6 +155,7 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
         "messages": [HumanMessage(content=body.message)],
         "session_id": session_id,
         "station_id": body.station_id,
+        "user_id": str(user.user_id),
     }
 
     # ------------------------------------------------------------------
@@ -179,11 +183,36 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
     if error:
         summary = f"处理请求时出现错误: {error}"
     elif report_md:
-        # 截断报告用于摘要字段——完整报告在 report_md 中
         first_line = report_md.split("\n", 1)[0] if report_md else ""
         summary = first_line[:200] if first_line else "报告已生成"
     else:
         summary = f"已处理您的请求 (意图: {intent or '未分类'})"
+
+    # 持久化本轮对话（用户隔离）
+    try:
+        from app.storage.db import get_db_manager
+        from app.storage.repositories import ChatHistoryRepository, UserProfileRepository
+
+        db = get_db_manager()
+        if await db.health_check():
+            async with db.session_context() as db_session:
+                repo = ChatHistoryRepository(db_session)
+                await repo.save_turn(
+                    session_id=session_id,
+                    user_message=body.message,
+                    assistant_message=report_md or summary,
+                    user_id=user.user_id,
+                    station_id=body.station_id,
+                    intent=intent,
+                )
+                # 更新用户常访问电站
+                if body.station_id:
+                    profile_repo = UserProfileRepository(db_session)
+                    await profile_repo.update_frequent_stations(
+                        user.user_id, body.station_id
+                    )
+    except Exception:
+        logger.exception("Failed to persist chat turn")
 
     return ChatResponse(
         session_id=session_id,
@@ -221,12 +250,13 @@ async def create_session(request: Request) -> SessionCreateResponse:
 @api_router.get("/sessions", response_model=list[SessionSummary])
 async def list_sessions(request: Request) -> list[SessionSummary]:
     """
-    列出所有会话摘要，按最近活跃时间降序排列。
+    列出当前用户的会话摘要，按最近活跃时间降序排列。
 
-    从 PostgreSQL 的 chat_history 表中聚合会话信息。
+    过滤条件：只返回当前认证用户创建的会话。
     若数据库不可用则返回空列表。
     """
-    logger.info("GET /sessions")
+    user = await get_current_user(request)
+    logger.info(f"GET /sessions user={user.user_id}")
 
     from app.storage.db import get_db_manager
     from app.storage.repositories import ChatHistoryRepository
@@ -239,7 +269,7 @@ async def list_sessions(request: Request) -> list[SessionSummary]:
     try:
         async with db.session_context() as session:
             repo = ChatHistoryRepository(session)
-            rows = await repo.list_sessions(limit=50)
+            rows = await repo.list_sessions(limit=50, user_id=user.user_id)
     except Exception:
         logger.exception("Failed to list sessions")
         return []
@@ -250,10 +280,13 @@ async def list_sessions(request: Request) -> list[SessionSummary]:
 @api_router.get("/sessions/{session_id}/messages", response_model=SessionMessagesResponse)
 async def get_session_messages(session_id: str, request: Request) -> SessionMessagesResponse:
     """
-    获取指定会话的完整聊天记录，按时间升序排列。
+    获取指定会话的完整聊天记录，按时间升序排列（需要认证）。
 
     用于会话切换时回显历史消息。
+    仅返回当前用户拥有的会话。
     """
+    user = await get_current_user(request)
+
     from uuid import UUID
 
     try:
@@ -264,7 +297,7 @@ async def get_session_messages(session_id: str, request: Request) -> SessionMess
             detail=f"Invalid session_id format: {session_id!r}",
         )
 
-    logger.info(f"GET /sessions/{session_id}/messages")
+    logger.info(f"GET /sessions/{session_id}/messages user={user.user_id}")
 
     from app.storage.db import get_db_manager
     from app.storage.repositories import ChatHistoryRepository
@@ -277,7 +310,24 @@ async def get_session_messages(session_id: str, request: Request) -> SessionMess
     try:
         async with db.session_context() as session:
             repo = ChatHistoryRepository(session)
+            # 安全校验：确保此会话包含当前用户的消息
             records = await repo.get_by_session(session_id, limit=200, offset=0)
+            if len(records) > 0:
+                # 已有消息的会话 → 检查所有权（从记录中查找第一条匹配）
+                belongs = any(
+                    r.user_id is not None and str(r.user_id) == str(user.user_id)
+                    for r in records
+                )
+                if not belongs:
+                    # 记录中无人匹配 → 再次查询确认
+                    belongs = await repo.session_has_messages_from_user(
+                        session_id, user.user_id
+                    )
+                if not belongs:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="无权访问此会话（不属于当前用户）",
+                    )
 
         # 按时间升序排列（get_by_session 返回降序）
         records = list(reversed(records))
@@ -306,11 +356,12 @@ async def get_session_messages(session_id: str, request: Request) -> SessionMess
 @api_router.get("/sessions/{session_id}", response_model=SessionInfo)
 async def get_session(session_id: str, request: Request) -> SessionInfo:
     """
-    获取指定对话会话的元数据。
+    获取指定对话会话的元数据（需要认证）。
 
     从 Redis（热缓存）查询会话消息计数。若 Redis 不可用则返回 0。
     """
-    logger.info(f"GET /sessions/{session_id}")
+    user = await get_current_user(request)
+    logger.info(f"GET /sessions/{session_id} user={user.user_id}")
 
     # 验证 UUID 格式
     from uuid import UUID
@@ -346,10 +397,13 @@ async def get_session(session_id: str, request: Request) -> SessionInfo:
 @api_router.delete("/sessions/{session_id}", status_code=200)
 async def clear_session(session_id: str, request: Request) -> dict[str, str]:
     """
-    清除会话的对话上下文。
+    清除会话的对话上下文（需要认证）。
 
     从 Redis（热缓存）移除会话数据并从 PostgreSQL 删除记录。
+    仅允许会话所有者执行此操作。
     """
+    user = await get_current_user(request)
+
     from uuid import UUID
 
     try:
@@ -360,7 +414,7 @@ async def clear_session(session_id: str, request: Request) -> dict[str, str]:
             detail=f"Invalid session_id format: {session_id!r}",
         )
 
-    logger.info(f"DELETE /sessions/{session_id}")
+    logger.info(f"DELETE /sessions/{session_id} user={user.user_id}")
 
     # 从 Redis 删除热缓存数据
     from app.storage.redis_client import get_redis_client
@@ -388,3 +442,122 @@ async def clear_session(session_id: str, request: Request) -> dict[str, str]:
             logger.warning(f"Failed to delete PG records for session {session_id}")
 
     return {"status": "ok", "session_id": session_id}
+
+
+# ============================================================================
+# 路由 — 用户画像 / 长期记忆
+# ============================================================================
+
+@api_router.get("/profile", response_model=UserProfileResponse)
+async def get_profile(request: Request) -> UserProfileResponse:
+    """
+    获取当前用户的完整画像数据（长期记忆）。
+
+    包括：偏好设置、常关注电站、对话摘要、记忆笔记。
+    """
+    user = await get_current_user(request)
+
+    from app.storage.db import get_db_manager
+    from app.storage.repositories import UserProfileRepository
+
+    db = get_db_manager()
+    if not await db.health_check():
+        return UserProfileResponse(user_id=str(user.user_id))
+
+    try:
+        async with db.session_context() as session:
+            repo = UserProfileRepository(session)
+            profile = await repo.get_or_create(user.user_id)
+            return UserProfileResponse(
+                user_id=str(profile.user_id),
+                preferences=profile.preferences or {},
+                frequent_stations=profile.frequent_stations or {},
+                conversation_summary=profile.conversation_summary,
+                memory_notes=list(profile.memory_notes or []),
+                updated_at=profile.updated_at.isoformat() if profile.updated_at else None,
+            )
+    except Exception:
+        logger.exception("Failed to load profile")
+        return UserProfileResponse(user_id=str(user.user_id))
+
+
+@api_router.put("/profile", response_model=UserProfileResponse)
+async def update_profile(
+    request: Request,
+    body: UpdateProfileRequest,
+) -> UserProfileResponse:
+    """
+    更新用户偏好设置和昵称。
+    """
+    user = await get_current_user(request)
+
+    from app.storage.db import get_db_manager
+    from app.storage.repositories import UserProfileRepository, UserRepository
+
+    db = get_db_manager()
+    if not await db.health_check():
+        raise HTTPException(status_code=503, detail="服务暂时不可用")
+
+    try:
+        async with db.session_context() as session:
+            # 更新昵称
+            if body.name is not None:
+                user_repo = UserRepository(session)
+                db_user = await user_repo.get_by_id(user.user_id)
+                if db_user:
+                    db_user.name = body.name
+
+            # 更新偏好
+            profile = None
+            if body.preferences is not None:
+                profile_repo = UserProfileRepository(session)
+                profile = await profile_repo.update_preferences(
+                    user.user_id, body.preferences
+                )
+            else:
+                profile_repo = UserProfileRepository(session)
+                profile = await profile_repo.get_or_create(user.user_id)
+
+            return UserProfileResponse(
+                user_id=str(profile.user_id),
+                preferences=profile.preferences or {},
+                frequent_stations=profile.frequent_stations or {},
+                conversation_summary=profile.conversation_summary,
+                memory_notes=list(profile.memory_notes or []),
+                updated_at=profile.updated_at.isoformat() if profile.updated_at else None,
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to update profile")
+        raise HTTPException(status_code=500, detail="更新失败")
+
+
+@api_router.post("/profile/memory", status_code=201)
+async def add_memory_note(
+    request: Request,
+    body: AddMemoryNoteRequest,
+) -> dict[str, str]:
+    """
+    添加一条长期记忆笔记。
+
+    可由用户手动添加，也可由 Agent 在对话结束后自动提炼。
+    """
+    user = await get_current_user(request)
+
+    from app.storage.db import get_db_manager
+    from app.storage.repositories import UserProfileRepository
+
+    db = get_db_manager()
+    if not await db.health_check():
+        raise HTTPException(status_code=503, detail="服务暂时不可用")
+
+    try:
+        async with db.session_context() as session:
+            repo = UserProfileRepository(session)
+            await repo.add_memory_note(user.user_id, body.content, body.source)
+            logger.info(f"Memory note added for user={user.user_id}")
+            return {"status": "ok"}
+    except Exception:
+        logger.exception("Failed to add memory note")
+        raise HTTPException(status_code=500, detail="添加失败")

@@ -27,6 +27,7 @@ from app.api.middleware import (
     SecurityHeadersMiddleware,
     SessionMiddleware,
 )
+from app.api.auth import auth_router
 from app.api.router import api_router
 from app.api.websocket import websocket_endpoint
 from app.agent.graph import get_graph
@@ -52,6 +53,20 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
         - 释放所有剩余资源。
     """
     settings = get_settings()
+
+    # --- 配置 loguru 日志级别 ---
+    logger.remove()
+    logger.add(
+        lambda msg: print(msg, end=""),
+        level=settings.log_level,
+        format="<green>{time:HH:mm:ss}</green> | <level>{level: <7}</level> | <level>{message}</level>",
+    )
+
+    # 抑制 uvicorn 访问日志（每次请求的 GET/POST 行）
+    import logging as std_logging
+    std_logging.getLogger("uvicorn.access").setLevel(std_logging.WARNING)
+    std_logging.getLogger("uvicorn.error").setLevel(std_logging.WARNING)
+
     logger.info(
         f"Starting {settings.app_name} v{settings.app_version} "
         f"({settings.environment} mode)"
@@ -62,6 +77,11 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     application.state.graph = get_graph()
     logger.info("Agent graph ready")
 
+    # 打印已注册的工具列表（一条汇总行）
+    from app.tools.decorator import list_tools
+    tool_names = [t["name"] for t in list_tools()]
+    logger.info(f"Tools registered: {', '.join(tool_names)}")
+
     # --- 启动：预热数据库连接池 ---
     try:
         from app.storage.db import get_db_manager
@@ -69,8 +89,14 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
         await db.connect()
         application.state.db_engine = db.engine
         logger.info("Database engine initialized")
+
+        # 建表（幂等）——如果旧表 schema 不兼容，先尝试 DROP CASCADE 重建
+        await db.create_all()
+
+        # 播种默认管理员账户
+        await _seed_admin(db, settings)
     except Exception:
-        logger.warning("Database not available — running without persistence")
+        logger.error("Database initialization failed — running without persistence")
         application.state.db_engine = None
 
     # --- 启动：验证 Redis 连接 ---
@@ -160,6 +186,7 @@ def create_app() -> FastAPI:
     )
 
     # --- 路由 ---
+    app.include_router(auth_router, prefix="/api/v1")
     app.include_router(api_router, prefix="/api/v1")
 
     # --- WebSocket 路由 ---
@@ -186,6 +213,39 @@ def create_app() -> FastAPI:
     app.mount("/", StaticFiles(directory="app/static", html=True), name="static")
 
     return app
+
+
+# ============================================================================
+# 管理员账户播种
+# ============================================================================
+
+async def _seed_admin(db, settings) -> None:
+    """
+    启动时检查默认管理员账户是否存在，不存在则自动创建。
+
+    管理员凭证来自配置 admin_username / admin_password。
+    默认：pvagent / 123456
+    """
+    from app.storage.repositories import UserRepository
+    from app.utils.auth import hash_password
+
+    try:
+        async with db.session_context() as session:
+            repo = UserRepository(session)
+            existing = await repo.get_by_username(settings.admin_username)
+            if existing is not None:
+                logger.debug(
+                    f"Admin user '{settings.admin_username}' already exists"
+                )
+                return
+
+            hashed = hash_password(settings.admin_password)
+            await repo.create(settings.admin_username, hashed)
+            logger.info(
+                f"Admin user seeded: {settings.admin_username}"
+            )
+    except Exception:
+        logger.error("Failed to seed admin user (DB may not be ready)")
 
 
 # --- 模块级单例（供 uvicorn 使用：`uvicorn app.api.main:app`） ---

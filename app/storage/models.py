@@ -34,6 +34,193 @@ class Base(DeclarativeBase):
 # ChatHistory — 完整对话日志
 # ============================================================================
 
+# ============================================================================
+# User — 用户账户
+# ============================================================================
+
+class User(Base):
+    """
+    用户账户，通过用户名+密码登录。
+
+    手机号为选填字段，用于后续可能的 SMS 通知或 2FA。
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="用户唯一标识符",
+    )
+    username: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        unique=True,
+        index=True,
+        comment="登录用户名",
+    )
+    hashed_password: Mapped[str] = mapped_column(
+        String(256),
+        nullable=False,
+        comment="PBKDF2-SHA256 哈希后的密码",
+    )
+    phone: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+        unique=True,
+        index=True,
+        comment="手机号（选填）",
+    )
+    name: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="用户昵称",
+    )
+    avatar: Mapped[str | None] = mapped_column(
+        String(512),
+        nullable=True,
+        comment="头像 URL",
+    )
+    is_active: Mapped[bool] = mapped_column(
+        default=True,
+        comment="是否启用",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        comment="注册时间",
+    )
+    last_login: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="最后登录时间",
+    )
+
+    def __repr__(self) -> str:
+        return f"<User(id={self.id}, username={self.username})>"
+
+
+# ============================================================================
+# VerificationCode — 短信验证码
+# ============================================================================
+
+class VerificationCode(Base):
+    """
+    手机验证码（备用，当前未启用）。
+
+    TTL 由调用方传入，通常 5 分钟。
+    """
+
+    __tablename__ = "verification_codes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    phone: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        comment="目标手机号",
+    )
+    code: Mapped[str] = mapped_column(
+        String(6),
+        nullable=False,
+        comment="6 位验证码",
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="过期时间",
+    )
+    used: Mapped[bool] = mapped_column(
+        default=False,
+        comment="是否已被使用",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_verification_codes_phone", "phone", "created_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<VerificationCode(phone={self.phone}, used={self.used})>"
+
+
+# ============================================================================
+# UserProfile — 用户画像 / 长期记忆
+# ============================================================================
+
+class UserProfile(Base):
+    """
+    用户画像，存储长期记忆和偏好。
+
+    字段：
+        preferences: 用户偏好设置（通知、语言等）
+        frequent_stations: 常关注的电站列表及其关注度
+        conversation_summary: Agent 从对话中提炼的用户关注点摘要
+        memory_notes: Agent 记录的关于用户的长期记忆笔记
+    """
+
+    __tablename__ = "user_profiles"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=False,
+        unique=True,
+        index=True,
+        comment="关联的用户 ID",
+    )
+    preferences: Mapped[dict] = mapped_column(
+        JSONB,
+        default=dict,
+        comment="用户偏好设置",
+    )
+    frequent_stations: Mapped[dict] = mapped_column(
+        JSONB,
+        default=dict,
+        comment="常关注电站及其权重",
+    )
+    conversation_summary: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Agent 提炼的对话关注点摘要",
+    )
+    memory_notes: Mapped[dict] = mapped_column(
+        JSONB,
+        default=list,
+        comment="长期记忆笔记列表 [{content, source, created_at}]",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return f"<UserProfile(user_id={self.user_id})>"
+
+
+# ============================================================================
+# ChatHistory — 完整对话日志
+# ============================================================================
+
 class ChatHistory(Base):
     """
     存储每条消息的完整对话记录，用于审计、检索和分析。
@@ -49,6 +236,12 @@ class ChatHistory(Base):
         primary_key=True,
         default=uuid.uuid4,
         comment="消息唯一标识符",
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+        comment="关联的用户 ID（用户隔离）",
     )
     session_id: Mapped[str] = mapped_column(
         String(64),
@@ -96,6 +289,7 @@ class ChatHistory(Base):
 
     # 常用查询的复合索引
     __table_args__ = (
+        Index("ix_chat_history_user_session", "user_id", "session_id"),
         Index("ix_chat_history_session_created", "session_id", "created_at"),
         Index("ix_chat_history_tenant", "tenant_id"),
         Index("ix_chat_history_station", "station_id"),

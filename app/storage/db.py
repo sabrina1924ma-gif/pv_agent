@@ -33,6 +33,68 @@ from app.config import get_settings
 from app.storage.models import Base
 from loguru import logger
 
+from sqlalchemy import Connection, event
+from sqlalchemy.exc import ProgrammingError
+
+
+def _create_all_safe(connection: Connection) -> None:
+    """
+    调用 Base.metadata.create_all，同时忽略重复索引/列错误。
+
+    当数据库中已有同名索引或约束时（某次初始化中断），
+    标准 create_all 会因 DuplicateTableError 直接崩溃。
+    使用此函数包装后可安全幂等执行。
+    """
+    try:
+        Base.metadata.create_all(bind=connection, checkfirst=True)
+    except ProgrammingError as exc:
+        # 如果因为索引/约束已存在而失败，仅记录警告并继续
+        error_msg = str(exc)
+        if "already exists" in error_msg or "Duplicate" in error_msg:
+            logger.warning(f"Ignored existing index/constraint during create_all")
+            # 不带 checkfirst 重试——跳过已知存在的索引
+            _create_all_ignore_duplicates(connection)
+        else:
+            raise
+
+
+def _create_all_ignore_duplicates(connection: Connection) -> None:
+    """
+    当 create_all 因 DuplicateTableError 中断时，逐个创建表并忽略已存在的。
+    这是第二层兜底策略。
+    """
+    for table in Base.metadata.sorted_tables:
+        try:
+            if not connection.dialect.has_table(connection, table.name):
+                table.create(bind=connection, checkfirst=True)
+            else:
+                # 表已存在，尝试创建缺失的列和索引
+                _ensure_indexes(connection, table)
+        except ProgrammingError as exc:
+            if "already exists" in str(exc) or "Duplicate" in str(exc):
+                logger.debug(f"Index already exists for table '{table.name}', skipped")
+            else:
+                raise
+
+
+def _ensure_indexes(connection: Connection, table) -> None:
+    """为已存在的表创建缺失的索引（已存在的忽略）。"""
+    from sqlalchemy import inspect
+
+    inspector = inspect(connection)
+    existing_idxs = {
+        idx["name"] for idx in inspector.get_indexes(table.name)
+    }
+    for idx in table.indexes:
+        if idx.name not in existing_idxs:
+            try:
+                idx.create(bind=connection)
+            except ProgrammingError as exc:
+                if "already exists" in str(exc) or "Duplicate" in str(exc):
+                    logger.debug(f"Index '{idx.name}' already exists, skipped")
+                else:
+                    raise
+
 
 class DatabaseManager:
     """
@@ -136,13 +198,13 @@ class DatabaseManager:
         根据 ORM 模型自动创建所有表。
 
         仅用于开发和首次部署。生产环境应使用 Alembic 迁移。
-        幂等操作：表已存在则跳过。
+        幂等操作：表已存在则跳过，索引冲突自动忽略。
         """
         if self._engine is None:
             raise RuntimeError("数据库未连接，请先调用 connect()")
 
         async with self._engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(_create_all_safe)
 
         table_names = ", ".join(Base.metadata.tables.keys())
         logger.info(f"Tables ensured: {table_names}")

@@ -101,3 +101,50 @@ export interface SessionMessagesResponse {
   session_id: string;
   messages: MessageItem[];
 }
+
+// ============================================================================
+// 认证类型
+// ============================================================================
+
+/** POST /api/v1/auth/register 请求 */
+export interface RegisterRequest {
+  username: string;
+  password: string;
+}
+
+/** POST /api/v1/auth/login 请求 */
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+/** 用户公开信息 */
+export interface UserInfo {
+  id: string;
+  username: string;
+  phone: string | null;
+  name: string | null;
+  avatar: string | null;
+  created_at: string | null;
+}
+
+/** 登录/注册成功响应 */
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  user: UserInfo;
+}
+
+// ============================================================================
+// 用户画像类型
+// ============================================================================
+
+/** GET /api/v1/profile 响应 */
+export interface UserProfileResponse {
+  user_id: string;
+  preferences: Record<string, unknown>;
+  frequent_stations: Record<string, number>;
+  conversation_summary: string | null;
+  memory_notes: Array<{ content: string; source: string; created_at: string }>;
+  updated_at: string | null;
+}

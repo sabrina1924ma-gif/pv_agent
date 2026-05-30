@@ -18,6 +18,7 @@ Session 的生命周期由调用方控制（FastAPI Depends 或 agent node 手�
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
@@ -56,6 +57,7 @@ class ChatHistoryRepository:
         role: str,
         content: str,
         *,
+        user_id: "uuid.UUID | None" = None,
         station_id: str | None = None,
         tenant_id: str = "default",
         intent: str | None = None,
@@ -68,6 +70,7 @@ class ChatHistoryRepository:
             session_id: 会话 ID。
             role: user / assistant / system / tool。
             content: 消息全文（含序列化的 tool result）。
+            user_id: 关联用户 ID（用户隔离）。
             station_id: 关联电站（可选）。
             tenant_id: 租户标识。
             intent: 此轮对话的意图标签。
@@ -78,6 +81,7 @@ class ChatHistoryRepository:
         """
         record = ChatHistory(
             session_id=session_id,
+            user_id=user_id,
             station_id=station_id,
             tenant_id=tenant_id,
             role=role,
@@ -96,6 +100,7 @@ class ChatHistoryRepository:
         user_message: str,
         assistant_message: str,
         *,
+        user_id: "uuid.UUID | None" = None,
         station_id: str | None = None,
         intent: str | None = None,
         metadata: dict[str, Any] | None = None,
@@ -110,6 +115,7 @@ class ChatHistoryRepository:
             session_id: 会话 ID。
             user_message: 用户原始输入。
             assistant_message: Agent 完整回复（含 Markdown 报告）。
+            user_id: 关联用户 ID。
             station_id: 关联电站。
             intent: 分类意图。
             metadata: 附加信息。
@@ -123,6 +129,7 @@ class ChatHistoryRepository:
             session_id=session_id,
             role="user",
             content=user_message,
+            user_id=user_id,
             station_id=station_id,
             intent=intent,
             metadata=metadata,
@@ -132,6 +139,7 @@ class ChatHistoryRepository:
             session_id=session_id,
             role="assistant",
             content=assistant_message,
+            user_id=user_id,
             station_id=station_id,
             intent=intent,
             metadata=metadata,
@@ -156,6 +164,7 @@ class ChatHistoryRepository:
         tool_name: str,
         tool_result: dict[str, Any],
         *,
+        user_id: "uuid.UUID | None" = None,
         station_id: str | None = None,
     ) -> ChatHistory:
         """
@@ -168,6 +177,7 @@ class ChatHistoryRepository:
             session_id=session_id,
             role="tool",
             content=content,
+            user_id=user_id,
             station_id=station_id,
             metadata={"tool_name": tool_name},
         )
@@ -233,6 +243,34 @@ class ChatHistoryRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one()
 
+    async def session_has_messages_from_user(
+        self,
+        session_id: str,
+        user_id: "uuid.UUID",
+    ) -> bool:
+        """
+        检查指定会话是否包含来自指定用户的消息。
+
+        用于会话所有权校验：只允许会话参与者访问历史记录。
+
+        Args:
+            session_id: 会话 ID。
+            user_id: 用户 ID。
+
+        Returns:
+            会话中包含该用户的消息则返回 True。
+        """
+        stmt = (
+            select(ChatHistory.id)
+            .where(
+                ChatHistory.session_id == session_id,
+                ChatHistory.user_id == user_id,
+            )
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.first() is not None
+
     async def delete_by_session(self, session_id: str) -> int:
         """
         删除某会话的全部消息（GDPR 合规 / 用户清空历史）。
@@ -266,9 +304,10 @@ class ChatHistoryRepository:
     async def list_sessions(
         self,
         limit: int = 50,
+        user_id: "uuid.UUID | None" = None,
     ) -> list[dict[str, Any]]:
         """
-        列出所有会话摘要（按最近活跃时间降序）。
+        列出会话摘要（按最近活跃时间降序）。
 
         从 chat_history 表中按 session_id 分组，返回每个会话的：
           - session_id
@@ -279,6 +318,7 @@ class ChatHistoryRepository:
 
         Args:
             limit: 返回会话数上限。
+            user_id: 可选，按用户过滤会话。
 
         Returns:
             会话摘要字典列表。
@@ -311,7 +351,7 @@ class ChatHistoryRepository:
         )
 
         # 主查询：聚合每个 session 的信息
-        stmt = (
+        stmt_base = (
             select(
                 ChatHistory.session_id,
                 func.min(ChatHistory.created_at).label("created_at"),
@@ -323,6 +363,14 @@ class ChatHistoryRepository:
                 first_msg,
                 ChatHistory.session_id == first_msg.c.session_id,
             )
+        )
+
+        # 用户隔离
+        if user_id is not None:
+            stmt_base = stmt_base.where(ChatHistory.user_id == user_id)
+
+        stmt = (
+            stmt_base
             .group_by(ChatHistory.session_id)
             .order_by(func.max(ChatHistory.created_at).desc())
             .limit(limit)
@@ -345,6 +393,215 @@ class ChatHistoryRepository:
             })
 
         return sessions
+
+
+# ============================================================================
+# UserRepository — 用户账户
+# ============================================================================
+
+class UserRepository:
+    """用户账户的持久化操作。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get_by_username(self, username: str) -> "User | None":
+        """按用户名查找用户。"""
+        from app.storage.models import User
+
+        stmt = select(User).where(User.username == username)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_id(self, user_id: "uuid.UUID") -> "User | None":
+        """通过 ID 查找用户。"""
+        from app.storage.models import User
+
+        stmt = select(User).where(User.id == user_id)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def create(self, username: str, hashed_password: str) -> "User":
+        """
+        创建新用户。
+
+        Args:
+            username: 登录用户名。
+            hashed_password: PBKDF2 哈希后的密码。
+
+        Returns:
+            新创建的用户。
+        """
+        from app.storage.models import User
+
+        user = User(username=username, hashed_password=hashed_password)
+        self._session.add(user)
+        await self._session.flush()
+        logger.info(f"Created user: username={username}, id={user.id}")
+        return user
+
+    async def username_exists(self, username: str) -> bool:
+        """检查用户名是否已被占用。"""
+        from app.storage.models import User
+
+        stmt = select(User.id).where(User.username == username).limit(1)
+        result = await self._session.execute(stmt)
+        return result.first() is not None
+
+    async def update_last_login(self, user: "User") -> None:
+        """更新用户最后登录时间。"""
+        user.last_login = datetime.now(timezone.utc)
+        await self._session.flush()
+
+
+# ============================================================================
+# VerificationCodeRepository — 验证码
+# ============================================================================
+
+class VerificationCodeRepository:
+    """手机验证码的持久化操作。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def create(self, phone: str, code: str, ttl_seconds: int) -> "VerificationCode":
+        """生成新的验证码记录。"""
+        from app.storage.models import VerificationCode
+
+        record = VerificationCode(
+            phone=phone,
+            code=code,
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
+        )
+        self._session.add(record)
+        await self._session.flush()
+        return record
+
+    async def verify(self, phone: str, code: str) -> bool:
+        """
+        验证验证码是否有效。
+
+        检查条件：
+            1. phone 匹配
+            2. code 匹配
+            3. 未过期
+            4. 未使用
+
+        验证通过后标记为已使用。
+
+        Returns:
+            True 表示验证通过。
+        """
+        from app.storage.models import VerificationCode
+
+        stmt = (
+            select(VerificationCode)
+            .where(
+                VerificationCode.phone == phone,
+                VerificationCode.code == code,
+                VerificationCode.expires_at > datetime.now(timezone.utc),
+                VerificationCode.used == False,  # noqa: E712
+            )
+            .order_by(VerificationCode.created_at.desc())
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        record = result.scalar_one_or_none()
+
+        if record is None:
+            return False
+
+        record.used = True
+        await self._session.flush()
+        return True
+
+
+# ============================================================================
+# UserProfileRepository — 用户画像 / 长期记忆
+# ============================================================================
+
+class UserProfileRepository:
+    """用户画像和长期记忆的持久化操作。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get_or_create(self, user_id: "uuid.UUID") -> "UserProfile":
+        """获取或创建用户画像。"""
+        from app.storage.models import UserProfile
+
+        stmt = select(UserProfile).where(UserProfile.user_id == user_id)
+        result = await self._session.execute(stmt)
+        profile = result.scalar_one_or_none()
+
+        if profile is not None:
+            return profile
+
+        profile = UserProfile(user_id=user_id)
+        self._session.add(profile)
+        await self._session.flush()
+        return profile
+
+    async def update_preferences(
+        self, user_id: "uuid.UUID", preferences: dict
+    ) -> "UserProfile":
+        """更新用户偏好设置（增量合并）。"""
+        profile = await self.get_or_create(user_id)
+        merged = {**profile.preferences, **preferences}
+        profile.preferences = merged
+        await self._session.flush()
+        return profile
+
+    async def add_memory_note(
+        self, user_id: "uuid.UUID", content: str, source: str = "user"
+    ) -> "UserProfile":
+        """
+        添加一条长期记忆笔记。
+
+        Args:
+            user_id: 用户 ID。
+            content: 笔记内容。
+            source: 来源（user / agent）。
+        """
+        profile = await self.get_or_create(user_id)
+        notes = list(profile.memory_notes or [])
+        notes.append({
+            "content": content,
+            "source": source,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        # 保留最近 50 条
+        if len(notes) > 50:
+            notes = notes[-50:]
+        profile.memory_notes = notes
+        await self._session.flush()
+        return profile
+
+    async def update_frequent_stations(
+        self, user_id: "uuid.UUID", station_id: str, increment: int = 1
+    ) -> "UserProfile":
+        """
+        更新常访问电站的权重。
+
+        每次用户查询某电站时调用，累积权重。
+        """
+        profile = await self.get_or_create(user_id)
+        stations = dict(profile.frequent_stations or {})
+        stations[station_id] = stations.get(station_id, 0) + increment
+        # 保留 Top 20
+        sorted_stations = sorted(stations.items(), key=lambda x: x[1], reverse=True)[:20]
+        profile.frequent_stations = dict(sorted_stations)
+        await self._session.flush()
+        return profile
+
+    async def update_conversation_summary(
+        self, user_id: "uuid.UUID", summary: str
+    ) -> "UserProfile":
+        """更新对话关注点摘要（由 Agent 生成）。"""
+        profile = await self.get_or_create(user_id)
+        profile.conversation_summary = summary
+        await self._session.flush()
+        return profile
 
 
 # ============================================================================

@@ -45,6 +45,22 @@ class Settings(BaseSettings):
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
 
+    # --- Auth / JWT ---
+    jwt_secret: str = secrets.token_hex(32)
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 43200  # 30 days
+
+    # --- Admin ---
+    admin_username: str = "pvagent"
+    admin_password: str = "123456"
+
+    # --- SMS (Alibaba Cloud) — 备用，当前未启用 ---
+    sms_provider: Literal["aliyun", "dev"] = "dev"
+    aliyun_access_key_id: str = ""
+    aliyun_access_key_secret: str = ""
+    aliyun_sms_sign_name: str = "PV Agent"
+    aliyun_sms_template_code: str = "SMS_123456789"
+
     # --- Redis ---
     redis_host: str = "localhost"
     redis_port: int = 6379

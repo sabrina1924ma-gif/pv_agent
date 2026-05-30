@@ -1,5 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import ChatBox from "../components/ChatBox";
+import { useAuth } from "../contexts/AuthContext";
 import {
   getSessionId,
   setActiveSessionId,
@@ -50,12 +52,14 @@ function formatTime(iso: string | null): string {
  * 右侧：ChatBox 对话区（填满剩余空间）。
  */
 function ChatPage() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [sessionId, setSessionId] = useState("");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [stationsOpen, setStationsOpen] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState(false);
-  const [sessionVersion, setSessionVersion] = useState(0); // 用于强制 ChatBox 刷新
+  const [sessionVersion, setSessionVersion] = useState(0);
 
   // --- 加载会话列表 ---
   const loadSessions = useCallback(async () => {
@@ -145,13 +149,35 @@ function ChatPage() {
               <span className="brand-icon">☀</span>
               <h2>PV Agent</h2>
             </div>
-            <button
-              className="sidebar-close"
-              onClick={() => setSidebarOpen(false)}
-              aria-label="关闭侧边栏"
-            >
-              ×
-            </button>
+            <div className="sidebar-header-actions">
+              <button
+                className="btn-logout"
+                onClick={() => {
+                  logout();
+                  navigate("/login");
+                }}
+                title="退出登录"
+              >
+                退出
+              </button>
+              <button
+                className="sidebar-close"
+                onClick={() => setSidebarOpen(false)}
+                aria-label="关闭侧边栏"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+
+          {/* 用户信息 */}
+          <div className="sidebar-user">
+            <span className="sidebar-user-avatar">
+              {user?.name?.[0] || user?.username?.[0] || "U"}
+            </span>
+            <span className="sidebar-user-name">
+              {user?.name || user?.username || "用户"}
+            </span>
           </div>
 
           <div className="sidebar-accent" />
@@ -351,6 +377,28 @@ function ChatPage() {
           color: #e8f0fe;
           letter-spacing: 0.3px;
         }
+        .sidebar-header-actions {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .btn-logout {
+          background: transparent;
+          color: #6b7f9e;
+          border: 1px solid #1e3050;
+          border-radius: 5px;
+          padding: 3px 10px;
+          font-size: 11px;
+          cursor: pointer;
+          font-family: inherit;
+          transition: all 0.2s;
+          white-space: nowrap;
+        }
+        .btn-logout:hover {
+          color: #ff6b6b;
+          border-color: #ff6b6b44;
+          background: #ff6b6b0d;
+        }
         .sidebar-close {
           background: none;
           border: none;
@@ -363,6 +411,36 @@ function ChatPage() {
         }
         .sidebar-close:hover {
           color: #ff6b6b;
+        }
+
+        /* ---- 用户信息 ---- */
+        .sidebar-user {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 20px 10px;
+          flex-shrink: 0;
+        }
+        .sidebar-user-avatar {
+          width: 30px;
+          height: 30px;
+          border-radius: 50%;
+          background: linear-gradient(135deg, #0077ff, #0055cc);
+          color: #fff;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 13px;
+          font-weight: 600;
+          flex-shrink: 0;
+        }
+        .sidebar-user-name {
+          font-size: 13px;
+          color: #a0b8d8;
+          font-weight: 500;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
 
         .sidebar-accent {
